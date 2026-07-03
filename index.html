@@ -85,7 +85,8 @@
     .h-wind{font-size:10px;color:var(--text-dim);margin-top:2px;}
     .fc-scroll{overflow-x:auto;margin-bottom:14px;padding-bottom:6px;}
     .fc-grid{display:grid;gap:8px;animation:slideUp .65s;}
-    .fc-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 8px;text-align:center;}
+    .fc-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 8px;text-align:center;cursor:pointer;}
+    .fc-card.sel{border-color:rgba(107,163,214,.65);background:rgba(107,163,214,.08);}
     .fc-card.today{border-color:rgba(245,200,66,.45);background:rgba(245,200,66,.06);}
     .fc-card.best{border-color:rgba(86,214,140,.45);background:rgba(86,214,140,.06);position:relative;overflow:hidden;}
     .fc-card.best::after{content:'★ BEST';position:absolute;top:9px;right:-22px;background:var(--green);color:#0a1520;font-size:8px;font-weight:800;letter-spacing:1.2px;padding:3px 30px;transform:rotate(35deg);}
@@ -99,6 +100,18 @@
     .fc-thunder{font-size:11px;color:var(--accent);font-weight:700;margin-top:2px;}
     .fc-sun{font-size:11px;color:var(--accent);margin-top:4px;}
     .fc-wind{font-size:11px;color:var(--text-dim);margin-top:2px;}
+    .tap-hint{font-size:11px;color:var(--text-dim);text-align:center;margin:-6px 0 14px;}
+    .day-detail{margin-bottom:14px;animation:slideUp .3s;}
+    .dd-head{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
+    .dd-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 16px 16px;}
+    .dd-seg{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:14px 8px;text-align:center;}
+    .dd-lbl{font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--text-dim);text-transform:uppercase;}
+    .dd-icon{font-size:30px;display:block;margin:8px 0 6px;}
+    .dd-cond{font-size:12px;color:var(--text-dim);margin-bottom:6px;min-height:28px;}
+    .dd-temp{font-size:18px;font-weight:600;}
+    .dd-min{font-size:13px;color:var(--text-dim);font-weight:400;}
+    .dd-rain{font-size:11px;color:var(--blue);margin-top:6px;}
+    .dd-wind{font-size:11px;color:var(--text-dim);margin-top:2px;}
     .chart-section{padding:22px;margin-bottom:14px;animation:slideUp .75s;}
     .section-title{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
@@ -200,9 +213,10 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
   return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div></div>`;
 }
 
-let chartInst=null;
+let chartInst=null,lastFc=[],selDay=-1;
 function render(data){
   if(chartInst){chartInst.destroy();chartInst=null;}
+  selDay=-1;
   const cur=data.current,m=data.meta;
   // Client-side filter: immer ab heute (Ortszeit), max 7 Tage — funktioniert auch wenn Daten 1-2 Tage alt sind
   const _p=locParts(m&&m.utcOffset);
@@ -215,6 +229,7 @@ function render(data){
     if(mv<_todayMid.getMonth()+1-6) entryDate.setFullYear(yr+1);
     return entryDate>=_todayMid;
   }).slice(0,7);
+  lastFc=fc;
   const n=fc.length;
   const scores=fc.map(r=>calcScore(r.max,r.rain,r.sun||5,r.wind||0,r.thunder||0));
   const bestI=scores.indexOf(Math.max(...scores));
@@ -248,7 +263,7 @@ function render(data){
     <div class="fc-scroll"><div class="fc-grid" style="grid-template-columns:repeat(${n},minmax(108px,1fr))">
       ${fc.map((r,i)=>{
         const th=r.thunder||0;
-        return`<div class="fc-card ${i===0?'today':''} ${i===bestI?'best':''}">
+        return`<div class="fc-card ${i===0?'today':''} ${i===bestI?'best':''}" onclick="toggleDay(${i})" title="Tagesverlauf anzeigen">
           <div class="fc-day">${r.wd}</div><div class="fc-date">${r.date}</div>
           <span class="fc-icon">${r.icon}</span>
           <div class="fc-max" style="color:${tempCol(r.max)}">${r.max}°</div>
@@ -261,6 +276,8 @@ function render(data){
         </div>`;
       }).join('')}
     </div></div>
+    <div class="tap-hint">Tag antippen für Morgens · Mittags · Abends</div>
+    <div class="card day-detail" id="day-detail" style="display:none"></div>
     <div class="card chart-section">
       <div class="section-title">🌡️ Temperaturverlauf</div>
       <canvas id="tempChart" height="115"></canvas>
@@ -386,6 +403,32 @@ function doubleCheck(data) {
   return issues;
 }
 
+function toggleDay(i){
+  const el=document.getElementById('day-detail');
+  if(!el)return;
+  const open=selDay!==i;
+  document.querySelectorAll('.fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i&&open));
+  if(!open){selDay=-1;el.style.display='none';return;}
+  selDay=i;
+  const r=lastFc[i];
+  el.style.display='block';
+  if(!r||!r.parts||!r.parts.length){
+    el.innerHTML=`<div class="dd-head">Tagesverlauf</div><div style="padding:0 22px 18px;font-size:13px;color:var(--text-dim)">Für diesen Tag liegen keine Stundendaten vor — bitte neu laden (↻).</div>`;
+    return;
+  }
+  el.innerHTML=`<div class="dd-head">${r.icon} ${r.wd} ${r.date} — Tagesverlauf</div>
+    <div class="dd-grid">
+    ${r.parts.map(p=>`<div class="dd-seg">
+      <div class="dd-lbl">${p.lbl}</div>
+      <span class="dd-icon">${p.icon}</span>
+      <div class="dd-cond">${p.cond}</div>
+      <div class="dd-temp"><span style="color:${tempCol(p.tmax)}">${p.tmax}°</span><span class="dd-min"> / ${p.tmin}°</span></div>
+      <div class="dd-rain">💧 ${p.rain}%${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
+      <div class="dd-wind">🌬 ${p.wind} km/h</div>
+    </div>`).join('')}
+    </div>`;
+}
+
 function renderCheckBadge(issues) {
   const el = document.getElementById('check-result');
   if (!el) return;
@@ -426,6 +469,26 @@ function wmoIcon(code){
   if (c<=84) return ["🌧","Schauer"];
   if (c<=89) return ["🌨","Schneeschauer"];
   return ["⛈","Gewitter"];
+}
+// Tagescharakter aus Stunden-Codes: Gewitter schlägt alles, Niederschlag ab 2 Stunden,
+// Nebel nur wenn er mehr als die Hälfte des Fensters dominiert (sonst zählt er als bedeckt) —
+// verhindert, dass Morgennebel einen sonnigen Tag als 🌫 anzeigt (daily.weather_code-Eigenheit).
+function modeOf(arr){
+  const cnt={};let best=arr[0],bn=0;
+  for(const c of arr){cnt[c]=(cnt[c]||0)+1;const n=cnt[c];if(n>bn||(n===bn&&c>best)){bn=n;best=c;}}
+  return best;
+}
+function pickDayCode(codes){
+  if(!codes.length) return null;
+  const sev=codes.filter(c=>c>=95);
+  if(sev.length) return Math.max(...sev);
+  const isPrec=c=>(c>=51&&c<=86)||c===77;
+  const prec=codes.filter(isPrec);
+  if(prec.length>=2) return modeOf(prec);
+  const fog=codes.filter(c=>c===45||c===48);
+  if(fog.length>codes.length/2) return modeOf(fog);
+  const rest=codes.map(c=>(c===45||c===48)?3:c).filter(c=>!isPrec(c));
+  return modeOf(rest.length?rest:codes);
 }
 function thunderPct(code){
   const c = Math.round(code||0);
@@ -513,10 +576,45 @@ function buildWeatherData(raw, rawM){
     });
   }
 
+  // Stunden-Indizes pro Kalendertag (für Tagescharakter + Morgens/Mittags/Abends)
+  const dayHours={};
+  htimes.forEach((t,idx)=>{const ds=t.slice(0,10);(dayHours[ds]=dayHours[ds]||[]).push(idx);});
+  const hourAt=ix=>+htimes[ix].slice(11,13);
+  // Stundenwert mit Multi-Modell-Median (falls verfügbar)
+  function hConsensus(ix,base,fallback){
+    const mi2=mHourIdx[htimes[ix]];
+    if(mi2!=null){
+      const vals=modelPairs(rawM.hourly,base,mi2).map(p=>p[1]);
+      if(vals.length>=2) return median(vals);
+    }
+    return fallback;
+  }
+
   const forecast=[];
   raw.daily.time.forEach((ds,i)=>{
     const dt=new Date(ds+'T00:00:00');
-    const [ic,co]=wmoIcon(raw.daily.weather_code[i]);
+    const hIdxs=dayHours[ds]||[];
+    // Tages-Icon aus dem Fenster 9–18 Uhr statt daily.weather_code (Morgennebel-Problem)
+    const dayCodes=hIdxs.filter(ix=>hourAt(ix)>=9&&hourAt(ix)<=18).map(ix=>raw.hourly.weather_code[ix]);
+    const dCode=pickDayCode(dayCodes);
+    const [ic,co]=wmoIcon(dCode!=null?dCode:raw.daily.weather_code[i]);
+    const thunderDay=hIdxs.length
+      ? Math.max(...hIdxs.map(ix=>thunderPct(raw.hourly.weather_code[ix])))
+      : thunderPct(raw.daily.weather_code[i]);
+    // Tagesabschnitte
+    const parts=[['Morgens',6,11],['Mittags',12,17],['Abends',18,23]].map(([lbl,h1,h2])=>{
+      const ixs=hIdxs.filter(ix=>hourAt(ix)>=h1&&hourAt(ix)<=h2);
+      if(!ixs.length) return null;
+      const codes=ixs.map(ix=>raw.hourly.weather_code[ix]);
+      const [pic,pco]=wmoIcon(pickDayCode(codes));
+      const temps=ixs.map(ix=>hConsensus(ix,'temperature_2m',raw.hourly.temperature_2m[ix]));
+      const rains=ixs.map(ix=>hConsensus(ix,'precipitation_probability',raw.hourly.precipitation_probability[ix]||0));
+      const winds=ixs.map(ix=>raw.hourly.wind_speed_10m[ix]||0);
+      return {lbl,icon:pic,cond:pco,
+        tmin:Math.round(Math.min(...temps)),tmax:Math.round(Math.max(...temps)),
+        rain:Math.round(Math.max(...rains)),wind:Math.round(Math.max(...winds)),
+        thunder:Math.max(...codes.map(thunderPct))};
+    }).filter(Boolean);
     const dy=ds.slice(8,10), mo=ds.slice(5,7);
     const sunH=Math.round((raw.daily.sunshine_duration[i]||0)/360)/10;
     let tmax = raw.daily.temperature_2m_max[i];
@@ -542,10 +640,10 @@ function buildWeatherData(raw, rawM){
       icon:ic, max:Math.round(tmax),
       min:Math.round(tmin), cond:co,
       rain:Math.round(rain),
-      thunder: thunderPct(raw.daily.weather_code[i]),
+      thunder: thunderDay,
       snow:0, sun:sunH,
       wind: Math.round(raw.daily.wind_speed_10m_max[i] || 0),
-      spread, mdetail
+      spread, mdetail, parts
     });
   });
 
