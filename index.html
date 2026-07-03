@@ -114,6 +114,7 @@
     .dd-min{font-size:13px;color:var(--text-dim);font-weight:400;}
     .dd-rain{font-size:11px;color:var(--blue);margin-top:6px;}
     .dd-wind{font-size:11px;color:var(--text-dim);margin-top:2px;}
+    .dd-models{font-size:11px;color:var(--text-dim);padding:0 22px 16px;}
     .chart-section{padding:22px;margin-bottom:14px;animation:slideUp .75s;}
     .section-title{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
@@ -437,7 +438,8 @@ function toggleDay(i){
       <div class="dd-rain">💧 ${p.rain}%${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
       <div class="dd-wind">🌬 ${p.wind} km/h</div>
     </div>`).join('')}
-    </div>`;
+    </div>
+    ${r.mdetail?`<div class="dd-models">🌡 Höchstwert je Modell: ${r.mdetail}</div>`:''}`;
 }
 
 // Chart-Tooltip auf Touch-Geräten wieder ausblenden: bleibt sonst nach dem
