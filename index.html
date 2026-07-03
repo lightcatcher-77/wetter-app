@@ -102,7 +102,8 @@
     .fc-sun{font-size:11px;color:var(--accent);margin-top:4px;}
     .fc-wind{font-size:11px;color:var(--text-dim);margin-top:2px;}
     .tap-hint{font-size:11px;color:var(--text-dim);text-align:center;margin:-6px 0 14px;}
-    .day-detail{margin-bottom:14px;animation:slideUp .3s;}
+    .day-detail{margin-bottom:14px;animation:slideUp .3s;position:relative;}
+    .dd-close{position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text-dim);font-size:14px;cursor:pointer;line-height:1;}
     .dd-head{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
     .dd-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 16px 16px;}
     .dd-seg{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:14px 8px;text-align:center;}
@@ -407,20 +408,26 @@ function doubleCheck(data) {
   return issues;
 }
 
+function closeDay(){
+  selDay=-1;
+  document.querySelectorAll('.fc-card').forEach(c=>c.classList.remove('sel'));
+  const el=document.getElementById('day-detail');
+  if(el)el.style.display='none';
+}
 function toggleDay(i){
   const el=document.getElementById('day-detail');
   if(!el)return;
-  const open=selDay!==i;
-  document.querySelectorAll('.fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i&&open));
-  if(!open){selDay=-1;el.style.display='none';return;}
+  if(selDay===i){closeDay();return;}
+  document.querySelectorAll('.fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i));
   selDay=i;
   const r=lastFc[i];
   el.style.display='block';
+  const closeBtn=`<button class="dd-close" onclick="closeDay()" aria-label="Schließen" title="Schließen">✕</button>`;
   if(!r||!r.parts||!r.parts.length){
-    el.innerHTML=`<div class="dd-head">Tagesverlauf</div><div style="padding:0 22px 18px;font-size:13px;color:var(--text-dim)">Für diesen Tag liegen keine Stundendaten vor — bitte neu laden (↻).</div>`;
+    el.innerHTML=`${closeBtn}<div class="dd-head">Tagesverlauf</div><div style="padding:0 22px 18px;font-size:13px;color:var(--text-dim)">Für diesen Tag liegen keine Stundendaten vor — bitte neu laden (↻).</div>`;
     return;
   }
-  el.innerHTML=`<div class="dd-head">${r.icon} ${r.wd} ${r.date} — Tagesverlauf</div>
+  el.innerHTML=`${closeBtn}<div class="dd-head">${r.icon} ${r.wd} ${r.date} — Tagesverlauf</div>
     <div class="dd-grid">
     ${r.parts.map(p=>`<div class="dd-seg">
       <div class="dd-lbl">${p.lbl}</div>
