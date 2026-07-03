@@ -440,6 +440,30 @@ function toggleDay(i){
     </div>`;
 }
 
+// Chart-Tooltip auf Touch-Geräten wieder ausblenden: bleibt sonst nach dem
+// Antippen dauerhaft stehen (kein mouseleave). Tipp außerhalb des Diagramms
+// oder 5 s Wartezeit blenden ihn aus.
+let ttTimer=null;
+function hideChartTooltip(){
+  if(!chartInst) return;
+  clearTimeout(ttTimer);
+  if(chartInst.getActiveElements().length){
+    chartInst.setActiveElements([]);
+    chartInst.tooltip.setActiveElements([],{x:0,y:0});
+    chartInst.update('none');
+  }
+}
+document.addEventListener('pointerdown',e=>{
+  const c=document.getElementById('tempChart');
+  if(!c||!chartInst) return;
+  if(e.target!==c){
+    hideChartTooltip();
+  }else{
+    clearTimeout(ttTimer);
+    ttTimer=setTimeout(hideChartTooltip,5000);
+  }
+},true);
+
 function renderCheckBadge(issues) {
   const el = document.getElementById('check-result');
   if (!el) return;
