@@ -10,9 +10,10 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/png" href="apple-touch-icon.png">
   <title>Wetter Live</title>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+  <script src="chart.umd.js"></script>
   <style>
+    @font-face{font-family:'DM Serif Display';font-style:normal;font-weight:400;font-display:swap;src:url('fonts/dm-serif.woff2') format('woff2');}
+    @font-face{font-family:'Outfit';font-style:normal;font-weight:300 700;font-display:swap;src:url('fonts/outfit.woff2') format('woff2');}
     :root {
       color-scheme: light;
       --sky-top:#0a1520;--sky-mid:#16294a;--sky-bottom:#2e5d8e;
@@ -31,7 +32,7 @@
     .header h1{font-family:'DM Serif Display',serif;font-size:clamp(28px,5.5vw,46px);font-weight:400;line-height:1.1;margin:10px 0 6px;}
     .accent{color:var(--accent);}
     .sub{font-size:13px;color:var(--text-dim);font-weight:300;}
-    .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;background:rgba(86,214,140,.12);border:1px solid rgba(86,214,140,.3);color:var(--green);margin-bottom:10px;}
+    .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;background:rgba(86,214,140,.12);border:1px solid rgba(86,214,140,.3);color:var(--green);margin:0 44px 10px;max-width:calc(100% - 88px);}
     .badge.stale{background:rgba(242,153,74,.12);border-color:rgba(242,153,74,.3);color:var(--orange);}
     .dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 2s infinite;}
     .reload{position:absolute;top:0;right:0;width:38px;height:38px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:17px;cursor:pointer;line-height:1;}
@@ -166,6 +167,9 @@ function mainUrl(lat,lon){
 function modelsUrl(lat,lon){
   return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&models=${MODELS.join(',')}&timezone=auto&forecast_days=9`;
 }
+function ensembleUrl(lat,lon){
+  return `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lon}&hourly=precipitation&models=icon_seamless&timezone=auto&forecast_days=9`;
+}
 
 // ── Anzeige-Helfer ───────────────────────────────────────────────────────────
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -244,7 +248,7 @@ function render(data){
   const stat3Lbl=uvOk?'UV-Index':'Luftfeuchte';
 
   const html=`
-    ${showWarn?`<div class="warning ${warnSev}"><div style="font-size:22px;line-height:1">⛈</div><div><strong>${data.warning.title}</strong><p>${data.warning.text}</p></div></div>`:''}
+    ${showWarn?`<div class="warning ${warnSev}"><div style="font-size:22px;line-height:1">⛈</div><div><strong>${esc(data.warning.title)}</strong><p>${esc(data.warning.text)}</p></div></div>`:''}
     <div class="hero">
       <div class="card hero-main">
         <span class="big-icon">${cur.icon}</span>
@@ -518,10 +522,36 @@ function modelPairs(obj,base,i){
   }
   return out;
 }
+// Ensemble → Regenwahrscheinlichkeit: Anteil der Member mit ≥0,1 mm in der Stunde.
+// Liefert {isoZeit: prozent} oder null, wenn die Ensemble-Antwort unbrauchbar ist.
+function buildEnsRain(rawE){
+  if(!rawE||!rawE.hourly||!rawE.hourly.time) return null;
+  const h=rawE.hourly;
+  const members=Object.keys(h).filter(k=>k.indexOf('precipitation')===0);
+  if(members.length<10) return null;
+  const map={};
+  h.time.forEach((t,i)=>{
+    let wet=0,n=0;
+    for(const m of members){const v=h[m][i];if(v!=null){n++;if(v>=0.1)wet++;}}
+    if(n>0) map[t]=Math.round(100*wet/n);
+  });
+  map.__members=members.length;
+  return map;
+}
+// Icon ↔ Regenrisiko abgleichen: trockenes Icon bei hohem Risiko anheben,
+// Regen-Icon bei sehr geringem Risiko absenken (Gewitter bleibt unangetastet)
+function reconcileCode(code,rainPct){
+  if(code==null||rainPct==null) return code;
+  const dry=code<=48;
+  if(rainPct>=50&&dry) return 80;
+  if(rainPct<15&&!dry&&code<95) return 3;
+  return code;
+}
 
 // Wandelt die Open-Meteo-Antworten in das Anzeigeformat um.
-// raw = best_match-Abruf (alle Variablen), rawM = Multi-Modell-Abruf (optional).
-function buildWeatherData(raw, rawM){
+// raw = best_match-Abruf (alle Variablen), rawM = Multi-Modell-Abruf (optional),
+// ensRain = Stunden-Regenwahrscheinlichkeit aus dem ICON-EPS-Ensemble (optional).
+function buildWeatherData(raw, rawM, ensRain){
   const cur = raw.current;
   const [ico,cond] = wmoIcon(cur.weather_code);
   const sunrise = raw.daily.sunrise[0].slice(11,16);
@@ -567,6 +597,7 @@ function buildWeatherData(raw, rawM){
       const rv = modelPairs(rawM.hourly,'precipitation_probability',mi).map(p=>p[1]);
       if (rv.length>=2) rain = median(rv);
     }
+    if (ensRain && ensRain[t]!=null) rain = ensRain[t];
     hourly24.push({
       iso:t, h:parseInt(t.slice(11,13)), time:t.slice(11,16),
       temp:Math.round(temp),
@@ -596,8 +627,7 @@ function buildWeatherData(raw, rawM){
     const hIdxs=dayHours[ds]||[];
     // Tages-Icon aus dem Fenster 9–18 Uhr statt daily.weather_code (Morgennebel-Problem)
     const dayCodes=hIdxs.filter(ix=>hourAt(ix)>=9&&hourAt(ix)<=18).map(ix=>raw.hourly.weather_code[ix]);
-    const dCode=pickDayCode(dayCodes);
-    const [ic,co]=wmoIcon(dCode!=null?dCode:raw.daily.weather_code[i]);
+    const dCode0=pickDayCode(dayCodes);
     const thunderDay=hIdxs.length
       ? Math.max(...hIdxs.map(ix=>thunderPct(raw.hourly.weather_code[ix])))
       : thunderPct(raw.daily.weather_code[i]);
@@ -606,13 +636,15 @@ function buildWeatherData(raw, rawM){
       const ixs=hIdxs.filter(ix=>hourAt(ix)>=h1&&hourAt(ix)<=h2);
       if(!ixs.length) return null;
       const codes=ixs.map(ix=>raw.hourly.weather_code[ix]);
-      const [pic,pco]=wmoIcon(pickDayCode(codes));
       const temps=ixs.map(ix=>hConsensus(ix,'temperature_2m',raw.hourly.temperature_2m[ix]));
       const rains=ixs.map(ix=>hConsensus(ix,'precipitation_probability',raw.hourly.precipitation_probability[ix]||0));
+      const ensSeg=ixs.map(ix=>ensRain?ensRain[htimes[ix]]:null).filter(v=>v!=null);
+      const segRain=ensSeg.length?Math.max(...ensSeg):Math.round(Math.max(...rains));
+      const [pic,pco]=wmoIcon(reconcileCode(pickDayCode(codes),segRain));
       const winds=ixs.map(ix=>raw.hourly.wind_speed_10m[ix]||0);
       return {lbl,icon:pic,cond:pco,
         tmin:Math.round(Math.min(...temps)),tmax:Math.round(Math.max(...temps)),
-        rain:Math.round(Math.max(...rains)),wind:Math.round(Math.max(...winds)),
+        rain:segRain,wind:Math.round(Math.max(...winds)),
         thunder:Math.max(...codes.map(thunderPct))};
     }).filter(Boolean);
     const dy=ds.slice(8,10), mo=ds.slice(5,7);
@@ -635,6 +667,10 @@ function buildWeatherData(raw, rawM){
       if (pMin.length>=2) tmin = median(pMin.map(p=>p[1]));
       if (pRain.length>=2) rain = median(pRain.map(p=>p[1]));
     }
+    // Ensemble schlägt Modell-Median beim Regenrisiko (Tagesmaximum der Stundenwerte)
+    const ensDay=hIdxs.map(ix=>ensRain?ensRain[htimes[ix]]:null).filter(v=>v!=null);
+    if (ensDay.length>=12) rain=Math.max(...ensDay);
+    const [ic,co]=wmoIcon(reconcileCode(dCode0!=null?dCode0:raw.daily.weather_code[i], rain));
     forecast.push({
       date:`${dy}.${mo}`, wd:WD_LBL[(dt.getDay()+6)%7],
       icon:ic, max:Math.round(tmax),
@@ -649,12 +685,14 @@ function buildWeatherData(raw, rawM){
 
   const now = new Date();
   const pad=n=>String(n).padStart(2,'0');
+  if (forecast.length) current.rain_pct = forecast[0].rain;
   return {
     current, warning:null, hourly24, forecast,
     meta:{
-      source: activeModels.length>1
+      source: (activeModels.length>1
         ? `Konsens aus ${activeModels.length} Modellen: ${activeModels.map(m=>MODEL_LBL[m]).join(' · ')}`
-        : 'Open-Meteo best match',
+        : 'Open-Meteo best match')
+        + (ensRain?` · Regenrisiko: ICON-EPS-Ensemble (${ensRain.__members} Member)`:''),
       nModels: activeModels.length,
       utcOffset: raw.utc_offset_seconds,
       ts:`${pad(now.getDate())}.${pad(now.getMonth()+1)}.${now.getFullYear()}`,
@@ -682,6 +720,40 @@ async function fetchLocationName(lat,lon){
     const j=await r.json();
     return {name:j.city||j.locality||j.principalSubdivision||null, region:j.principalSubdivision||''};
   }catch(e){return null;}
+}
+
+// ── Wetterwarnungen: DWD (via Bright Sky) + GeoSphere Österreich ─────────────
+async function fetchWarnings(lat,lon){
+  const out=[];
+  try{
+    const r=await fetch(`https://api.brightsky.dev/alerts?lat=${lat}&lon=${lon}`);
+    if(r.ok){
+      const j=await r.json();
+      (j.alerts||[]).forEach(a=>out.push({
+        title:a.headline_de||a.event_de||'Wetterwarnung (DWD)',
+        text:(a.description_de||'').slice(0,300),
+        severity:(a.severity==='severe'||a.severity==='extreme')?'danger':'info'
+      }));
+    }
+  }catch(e){}
+  // Österreich (grobe Bounding Box) zusätzlich über GeoSphere/ZAMG
+  if(lat>=46.3&&lat<=49.1&&lon>=9.5&&lon<=17.2){
+    try{
+      const r=await fetch(`https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lon=${lon}&lat=${lat}&lang=de`);
+      if(r.ok){
+        const j=await r.json();
+        (j?.properties?.warnings||[]).forEach(w=>{
+          const p=w.properties||w;
+          out.push({
+            title:p.text||p.type||'Wetterwarnung (GeoSphere)',
+            text:String(p.auswirkungen||p.meteotext||'').slice(0,300),
+            severity:(+(p.warnstufeid||p.rawinfo?.wlevel||0)>=3)?'danger':'info'
+          });
+        });
+      }
+    }catch(e){}
+  }
+  return out;
 }
 
 // ── Favoriten & Standortwahl ─────────────────────────────────────────────────
@@ -789,13 +861,19 @@ async function loadAll(){
       lat=pos?pos.lat:FALLBACK.lat;lon=pos?pos.lon:FALLBACK.lon;
     }
     setBadge('Wetterdaten werden geladen…');
-    const [main,models,place]=await Promise.all([
+    const [main,models,ens,place,warns]=await Promise.all([
       fetch(mainUrl(lat,lon)).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
       fetch(modelsUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
-      (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null)
+      fetch(ensembleUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
+      (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null),
+      fetchWarnings(lat,lon)
     ]);
     if(!main.current||!main.hourly||!main.daily) throw new Error('Unerwartetes Antwortformat');
-    const data=buildWeatherData(main,models);
+    const data=buildWeatherData(main,models,buildEnsRain(ens));
+    if(warns&&warns.length){
+      const top=warns.find(w=>w.severity==='danger')||warns[0];
+      data.warning={title:top.title+(warns.length>1?` (+${warns.length-1} weitere)`:''),text:top.text,severity:top.severity};
+    }
     const locName=activeLoc.mode==='fixed'
       ? activeLoc.name
       : (pos?((place&&place.name)||'Dein Standort'):FALLBACK.name);
@@ -845,6 +923,11 @@ if(cached&&cached.data&&cached.data.meta){
   showLoading();
 }
 loadAll();
+
+// Service Worker: App-Dateien offline vorhalten (nur über http/https, nicht bei file://)
+if('serviceWorker' in navigator && location.protocol.indexOf('http')===0){
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
 </script>
 </body>
 </html>
