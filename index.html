@@ -260,7 +260,7 @@ function render(data){
         <div class="stat-box"><div class="sv">💨 ${cur.wind}</div><div class="sl">km/h ${cur.windDir}</div></div>
         <div class="${stat2Cls}"><div class="sv">${stat2Val}</div><div class="sl">${stat2Lbl}</div></div>
         <div class="stat-box"><div class="sv">${stat3Val}</div><div class="sl">${stat3Lbl}</div></div>
-        <div class="stat-box"><div class="sv">🌅 ${cur.sunrise}</div><div class="sl">Aufgang</div></div>
+        <div class="stat-box"><div class="sv" style="font-size:15px;line-height:1.45">🌅 ${cur.sunrise}<br>🌇 ${cur.sunset}</div><div class="sl">Sonne</div></div>
       </div>
     </div>
     ${makeHourly(data.hourly24,cur.sunrise,cur.sunset,m&&m.utcOffset)}
