@@ -1,7 +1,10 @@
 // Service Worker der Wetter-App: hält die App-Dateien offline vor.
 // HTML wird network-first geladen (Updates kommen sofort an), statische
 // Assets cache-first. API-Aufrufe (fremde Origins) werden nicht angefasst.
-const CACHE = 'wetter-app-v1';
+// Wichtig: GitHub Pages liefert index.html mit "Cache-Control: max-age=600" —
+// ohne {cache:'no-store'} würde fetch() hier den 10-Minuten-Browser-Cache
+// treffen und ein Update erst nach Ablauf dieser Frist zeigen.
+const CACHE = 'wetter-app-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -31,7 +34,7 @@ self.addEventListener('fetch', e => {
 
   if (e.request.mode === 'navigate' || url.pathname.endsWith('/index.html')) {
     e.respondWith(
-      fetch(e.request).then(r => {
+      fetch(e.request, { cache: 'no-store' }).then(r => {
         const copy = r.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));
         return r;

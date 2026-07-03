@@ -312,23 +312,36 @@ function render(data){
   setTimeout(()=>{
     const ctx=document.getElementById('tempChart');
     if(!ctx)return;
+    // Unauffällige Einzelmodell-Linien: zeigen die Streuung hinter den fett
+    // hervorgehobenen Median-Linien (Max/Min), sichtbar beim Hovern über einen Tag.
+    const modelDatasets=[];
+    MODELS.forEach(m=>{
+      const maxArr=fc.map(r=>r.modelVals&&r.modelVals[m]&&r.modelVals[m].max!=null?r.modelVals[m].max:null);
+      const minArr=fc.map(r=>r.modelVals&&r.modelVals[m]&&r.modelVals[m].min!=null?r.modelVals[m].min:null);
+      if(maxArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Max`,data:maxArr,borderColor:'rgba(245,200,66,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(245,200,66,.55)',tension:0.4,spanGaps:true});
+      if(minArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Min`,data:minArr,borderColor:'rgba(107,163,214,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(107,163,214,.55)',tension:0.4,spanGaps:true});
+    });
     chartInst=new Chart(ctx,{
       type:'line',
       data:{
         labels:fc.map(r=>r.wd+' '+r.date),
         datasets:[
-          {label:'Max °C',data:fc.map(r=>r.max),borderColor:'#f5c842',backgroundColor:'rgba(245,200,66,.12)',fill:true,tension:0.4,
+          ...modelDatasets,
+          {label:'Max °C',data:fc.map(r=>r.max),borderColor:'#f5c842',backgroundColor:'rgba(245,200,66,.12)',fill:true,tension:0.4,borderWidth:3,
            pointBackgroundColor:fc.map((_,i)=>i===bestI?'#56d68c':'#f5c842'),
            pointRadius:fc.map((_,i)=>i===bestI?8:5)},
-          {label:'Min °C',data:fc.map(r=>r.min),borderColor:'#6ba3d6',backgroundColor:'rgba(107,163,214,.06)',fill:false,tension:0.4,pointBackgroundColor:'#6ba3d6',pointRadius:4}
+          {label:'Min °C',data:fc.map(r=>r.min),borderColor:'#6ba3d6',backgroundColor:'rgba(107,163,214,.06)',fill:false,tension:0.4,borderWidth:3,pointBackgroundColor:'#6ba3d6',pointRadius:4}
         ]
       },
       options:{responsive:true,interaction:{mode:'index',intersect:false},
-        plugins:{legend:{labels:{color:'#8ba0b8',font:{family:'Outfit',size:12}}},
-          tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y}°C`}}},
+        plugins:{legend:{labels:{color:'#8ba0b8',font:{family:'Outfit',size:12},
+          filter:item=>item.text==='Max °C'||item.text==='Min °C'}},
+          tooltip:{
+            itemSort:(a,b)=>{const w=l=>l==='Max °C'?0:l==='Min °C'?1:2;return w(a.dataset.label)-w(b.dataset.label);},
+            callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y}°C`}}},
         scales:{
           x:{ticks:{color:'#8ba0b8',font:{family:'Outfit',size:11}},grid:{color:'rgba(255,255,255,.05)'}},
-          y:{ticks:{color:'#8ba0b8',font:{family:'Outfit'},callback:v=>v+'°'},grid:{color:'rgba(255,255,255,.05)'}}
+          y:{ticks:{color:'#8ba0b8',font:{family:'Outfit'},stepSize:5,callback:v=>v+'°'},grid:{color:'rgba(255,255,255,.05)'}}
         }
       }
     });
@@ -685,7 +698,7 @@ function buildWeatherData(raw, rawM, ensRain){
     let tmax = raw.daily.temperature_2m_max[i];
     let tmin = raw.daily.temperature_2m_min[i];
     let rain = raw.daily.precipitation_probability_max[i] || 0;
-    let spread = 0, mdetail = '';
+    let spread = 0, mdetail = '', modelVals = {};
     const mi = mDayIdx[ds];
     if (mi!=null) {
       const pMax = modelPairs(rawM.daily,'temperature_2m_max',mi);
@@ -699,6 +712,9 @@ function buildWeatherData(raw, rawM, ensRain){
       }
       if (pMin.length>=2) tmin = median(pMin.map(p=>p[1]));
       if (pRain.length>=2) rain = median(pRain.map(p=>p[1]));
+      // Einzelwerte je Modell für den Temperaturchart (Max + Min, gerundet)
+      pMax.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].max=Math.round(v); });
+      pMin.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].min=Math.round(v); });
     }
     // Ensemble schlägt Modell-Median beim Regenrisiko (Tagesmaximum der Stundenwerte)
     const ensDay=hIdxs.map(ix=>ensRain?ensRain[htimes[ix]]:null).filter(v=>v!=null);
@@ -712,7 +728,7 @@ function buildWeatherData(raw, rawM, ensRain){
       thunder: thunderDay,
       snow:0, sun:sunH,
       wind: Math.round(raw.daily.wind_speed_10m_max[i] || 0),
-      spread, mdetail, parts
+      spread, mdetail, parts, modelVals
     });
   });
 
@@ -958,7 +974,15 @@ if(cached&&cached.data&&cached.data.meta){
 loadAll();
 
 // Service Worker: App-Dateien offline vorhalten (nur über http/https, nicht bei file://)
+// Übernimmt eine neue Version ein anderer Tab bereits aktiv gemachte Version,
+// einmal neu laden — verhindert, dass eine alte Version stehen bleibt.
 if('serviceWorker' in navigator && location.protocol.indexOf('http')===0){
+  let swReloaded=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(swReloaded)return;
+    swReloaded=true;
+    location.reload();
+  });
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 </script>
