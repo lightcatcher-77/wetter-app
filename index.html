@@ -556,12 +556,6 @@ function windDirLbl(deg){
 const WD_LBL=['Mo','Di','Mi','Do','Fr','Sa','So'];
 
 // ── Multi-Modell-Konsens ─────────────────────────────────────────────────────
-function median(vals){
-  const v=vals.filter(x=>x!=null&&isFinite(x)).sort((a,b)=>a-b);
-  if(!v.length) return null;
-  const m=Math.floor(v.length/2);
-  return v.length%2?v[m]:(v[m-1]+v[m])/2;
-}
 function modelPairs(obj,base,i){
   const out=[];
   for(const m of MODELS){
@@ -569,6 +563,21 @@ function modelPairs(obj,base,i){
     if(v!=null&&isFinite(v)) out.push([m,v]);
   }
   return out;
+}
+// Lead-time-abhängige Gewichte: nah dran zählt ICON-D2-Auflösung mehr,
+// ab Tag 3 verliert ICON an Reichweite und ECMWF (bestes Modell im Mittelfrist-Bereich) übernimmt.
+const W_NEAR = { icon_seamless:0.40, ecmwf_ifs025:0.30, gfs_seamless:0.15, meteofrance_seamless:0.15 }; // 0-48h
+const W_FAR  = { icon_seamless:0.20, ecmwf_ifs025:0.45, gfs_seamless:0.20, meteofrance_seamless:0.15 }; // >48h
+function weightsForHour(hoursAhead){ return hoursAhead<=48 ? W_NEAR : W_FAR; }
+function weightsForDay(dayIndex){ return dayIndex<=1 ? W_NEAR : W_FAR; }
+function weightedMedian(pairs, weights){
+  const items = pairs.filter(([,v])=>v!=null&&isFinite(v)).map(([m,v])=>({v,w:weights[m]??0.25}));
+  if(!items.length) return null;
+  items.sort((a,b)=>a.v-b.v);
+  const total = items.reduce((s,it)=>s+it.w,0);
+  let cum=0;
+  for(const it of items){ cum+=it.w; if(cum>=total/2) return it.v; }
+  return items[items.length-1].v;
 }
 // Ensemble → Regenwahrscheinlichkeit: Anteil der Member mit ≥0,1 mm in der Stunde.
 // Liefert {isoZeit: prozent} oder null, wenn die Ensemble-Antwort unbrauchbar ist.
@@ -640,10 +649,11 @@ function buildWeatherData(raw, rawM, ensRain){
     let rain = raw.hourly.precipitation_probability[idx] || 0;
     const mi = mHourIdx[t];
     if (mi!=null) {
-      const tv = modelPairs(rawM.hourly,'temperature_2m',mi).map(p=>p[1]);
-      if (tv.length>=2) temp = median(tv);
-      const rv = modelPairs(rawM.hourly,'precipitation_probability',mi).map(p=>p[1]);
-      if (rv.length>=2) rain = median(rv);
+      const w = weightsForHour(i);
+      const tp = modelPairs(rawM.hourly,'temperature_2m',mi);
+      if (tp.length>=2) temp = weightedMedian(tp,w);
+      const rp = modelPairs(rawM.hourly,'precipitation_probability',mi);
+      if (rp.length>=2) rain = weightedMedian(rp,w);
     }
     if (ensRain && ensRain[t]!=null) rain = ensRain[t];
     hourly24.push({
@@ -664,8 +674,8 @@ function buildWeatherData(raw, rawM, ensRain){
   function hConsensus(ix,base,fallback){
     const mi2=mHourIdx[htimes[ix]];
     if(mi2!=null){
-      const vals=modelPairs(rawM.hourly,base,mi2).map(p=>p[1]);
-      if(vals.length>=2) return median(vals);
+      const pairs=modelPairs(rawM.hourly,base,mi2);
+      if(pairs.length>=2) return weightedMedian(pairs, weightsForHour(ix-si));
     }
     return fallback;
   }
@@ -705,17 +715,18 @@ function buildWeatherData(raw, rawM, ensRain){
     let spread = 0, mdetail = '', modelVals = {};
     const mi = mDayIdx[ds];
     if (mi!=null) {
+      const w = weightsForDay(i);
       const pMax = modelPairs(rawM.daily,'temperature_2m_max',mi);
       const pMin = modelPairs(rawM.daily,'temperature_2m_min',mi);
       const pRain = modelPairs(rawM.daily,'precipitation_probability_max',mi);
       if (pMax.length>=2) {
         const vals=pMax.map(p=>p[1]);
-        tmax = median(vals);
+        tmax = weightedMedian(pMax,w);
         spread = Math.round(Math.max(...vals)-Math.min(...vals));
         mdetail = pMax.map(([m,v])=>`${MODEL_LBL[m]} ${Math.round(v)}°`).join(' · ');
       }
-      if (pMin.length>=2) tmin = median(pMin.map(p=>p[1]));
-      if (pRain.length>=2) rain = median(pRain.map(p=>p[1]));
+      if (pMin.length>=2) tmin = weightedMedian(pMin,w);
+      if (pRain.length>=2) rain = weightedMedian(pRain,w);
       // Einzelwerte je Modell für den Temperaturchart (Max + Min, gerundet)
       pMax.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].max=Math.round(v); });
       pMin.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].min=Math.round(v); });
