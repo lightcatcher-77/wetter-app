@@ -4,14 +4,20 @@
 // Wichtig: GitHub Pages liefert index.html mit "Cache-Control: max-age=600" —
 // ohne {cache:'no-store'} würde fetch() hier den 10-Minuten-Browser-Cache
 // treffen und ein Update erst nach Ablauf dieser Frist zeigen.
-const CACHE = 'wetter-app-v2';
+const CACHE = 'wetter-app-v3';
 const ASSETS = [
   './',
   './index.html',
   './chart.umd.js',
-  './fonts/dm-serif.woff2',
   './fonts/outfit.woff2',
-  './apple-touch-icon.png'
+  './apple-touch-icon.png',
+  './leaflet/leaflet.js',
+  './leaflet/leaflet.css',
+  './leaflet/images/layers.png',
+  './leaflet/images/layers-2x.png',
+  './leaflet/images/marker-icon.png',
+  './leaflet/images/marker-icon-2x.png',
+  './leaflet/images/marker-shadow.png'
 ];
 
 self.addEventListener('install', e => {
