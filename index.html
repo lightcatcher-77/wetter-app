@@ -11,6 +11,8 @@
   <link rel="icon" type="image/png" href="apple-touch-icon.png">
   <title>Wetter Live</title>
   <script src="chart.umd.js"></script>
+  <link rel="stylesheet" href="leaflet/leaflet.css">
+  <script src="leaflet/leaflet.js"></script>
   <style>
     @font-face{font-family:'Outfit';font-style:normal;font-weight:300 700;font-display:swap;src:url('fonts/outfit.woff2') format('woff2');}
     :root {
@@ -56,6 +58,26 @@
     .sr-item span{color:var(--text-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .sr-note{padding:10px 4px;font-size:13px;color:var(--text-dim);}
     .card{background:var(--card);border:1px solid var(--border);border-radius:18px;backdrop-filter:blur(12px);}
+    .radar-card{padding:16px 16px 14px;margin-bottom:18px;animation:slideUp .5s;}
+    .radar-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
+    #radar-map{height:220px;border-radius:12px;overflow:hidden;background:#0a1520;}
+    .leaflet-control-attribution{background:rgba(10,20,30,.55) !important;color:var(--text-dim) !important;font-size:9px !important;}
+    .leaflet-control-attribution a{color:var(--text-dim) !important;}
+    .leaflet-control-zoom a{background:var(--card) !important;color:var(--text) !important;border-color:var(--border) !important;}
+    .radar-time-big{text-align:center;font-size:16px;font-weight:700;color:var(--accent);margin-top:12px;letter-spacing:.2px;}
+    .radar-controls{display:flex;align-items:flex-start;gap:10px;margin-top:6px;}
+    .radar-btn{flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .radar-slider-wrap{position:relative;flex:1;padding-bottom:16px;padding-top:5px;}
+    .radar-slider-wrap input[type=range]{width:100%;display:block;accent-color:var(--accent);position:relative;z-index:2;}
+    .radar-ticks{position:absolute;left:8px;right:8px;top:20px;height:14px;pointer-events:none;}
+    .radar-tick{position:absolute;top:0;width:1px;height:6px;background:var(--border);transform:translateX(-50%);}
+    .radar-tick.hour{height:9px;background:var(--text-dim);}
+    .radar-tick.now{width:2px;height:12px;background:var(--accent);box-shadow:0 0 5px rgba(245,200,66,.7);}
+    .radar-tick-label{position:absolute;top:7px;font-size:9px;color:var(--text-dim);transform:translateX(-50%);white-space:nowrap;}
+    .radar-tick-label.now{color:var(--accent);font-weight:700;}
+    .radar-badge{flex-shrink:0;font-size:10px;font-weight:700;letter-spacing:1px;padding:3px 9px;border-radius:10px;background:rgba(86,214,140,.12);border:1px solid rgba(86,214,140,.3);color:var(--green);}
+    .radar-badge.forecast{background:rgba(245,200,66,.12);border-color:rgba(245,200,66,.35);color:var(--accent);}
+    .radar-note{font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.5;}
     .warning{display:flex;gap:12px;align-items:flex-start;background:rgba(242,153,74,.09);border:1px solid rgba(242,153,74,.25);border-radius:14px;padding:14px 16px;margin-bottom:18px;animation:slideUp .5s;}
     .warning strong{color:var(--orange);}
     .warning p{font-size:13px;color:var(--text-dim);margin-top:3px;line-height:1.6;}
@@ -68,6 +90,9 @@
     .hero-main .big-unit{font-size:28px;color:var(--text-dim);vertical-align:super;}
     .hero-main .condition{font-size:16px;color:var(--text-dim);margin-top:10px;}
     .hero-main .feels{font-size:13px;color:var(--text-dim);margin-top:4px;}
+    .radar-flag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 11px;border-radius:10px;margin-top:10px;background:rgba(107,163,214,.14);border:1px solid rgba(107,163,214,.35);color:var(--blue);}
+    .radar-flag.mittel{background:rgba(86,214,140,.14);border-color:rgba(86,214,140,.35);color:var(--green);}
+    .radar-flag.stark{background:rgba(235,87,87,.14);border-color:rgba(235,87,87,.4);color:var(--red);}
     .hero-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:16px;align-content:center;}
     .stat-box{background:rgba(255,255,255,0.05);border-radius:12px;padding:14px 10px;text-align:center;}
     .stat-box .sv{font-size:20px;font-weight:600;}
@@ -157,7 +182,24 @@
       <div id="search-results"></div>
     </div>
   </div>
-  <div id="content"></div>
+  <div id="content-top"></div>
+  <div class="card radar-card">
+    <div class="radar-head">
+      <div class="section-title" style="margin-bottom:0">🌧️ Regenradar</div>
+      <span class="radar-badge" id="radar-badge">LIVE</span>
+    </div>
+    <div id="radar-map"></div>
+    <div class="radar-time-big" id="radar-time">Lädt…</div>
+    <div class="radar-controls">
+      <button class="radar-btn" id="radar-play" onclick="radarTogglePlay()" title="Animation abspielen/pausieren">▶</button>
+      <div class="radar-slider-wrap">
+        <input type="range" id="radar-slider" min="0" max="0" value="0" oninput="radarSeek(this.value)">
+        <div class="radar-ticks" id="radar-ticks"></div>
+      </div>
+    </div>
+    <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
+  </div>
+  <div id="content-bottom"></div>
   <div id="check-result" style="text-align:center;padding:0 0 8px"></div>
 </div>
 <script>
@@ -255,7 +297,7 @@ function render(data){
   const stat3Val=uvOk?`☀️ UV ${cur.uv}`:`💦 ${cur.humidity}%`;
   const stat3Lbl=uvOk?'UV-Index':'Luftfeuchte';
 
-  const html=`
+  const htmlTop=`
     ${showWarn?`<div class="warning ${warnSev}"><div style="font-size:22px;line-height:1">⛈</div><div><strong>${esc(data.warning.title)}</strong><p>${esc(data.warning.text)}</p></div></div>`:''}
     <div class="hero">
       <div class="card hero-main">
@@ -263,6 +305,7 @@ function render(data){
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
         <div class="condition">${cur.condition}</div>
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
+        <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
       </div>
       <div class="hero-stats">
         <div class="stat-box"><div class="sv">💨 ${cur.wind}</div><div class="sl">km/h ${cur.windDir}</div></div>
@@ -289,7 +332,9 @@ function render(data){
       }).join('')}
     </div></div>
     <div class="tap-hint">Tag antippen für Morgens · Mittags · Abends</div>
-    <div class="card day-detail" id="day-detail" style="display:none"></div>
+    <div class="card day-detail" id="day-detail" style="display:none"></div>`;
+
+  const htmlBottom=`
     <div class="card chart-section">
       <div class="section-title">🌡️ Temperaturverlauf</div>
       <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
@@ -314,7 +359,8 @@ function render(data){
       <a href="https://www.dwd.de/DE/wetter/warnungen_gemeinden/warnWetter_node.html" target="_blank">DWD-Warnungen ↗</a>
     </div>`;
 
-  document.getElementById('content').innerHTML=html;
+  document.getElementById('content-top').innerHTML=htmlTop;
+  document.getElementById('content-bottom').innerHTML=htmlBottom;
   setTimeout(()=>{
     const ctx=document.getElementById('tempChart');
     if(!ctx)return;
@@ -825,6 +871,164 @@ async function fetchWarnings(lat,lon){
   return out;
 }
 
+// ── Regenradar (RainViewer) ──────────────────────────────────────────────────
+let radarMap=null, radarLayer=null, radarMarker=null;
+let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
+let radarLoc=null, radarSampleCanvas=null, radarSampleCtx=null, radarSampleSeq=0;
+
+function initRadar(){
+  if(typeof L==='undefined'||radarMap)return;
+  radarMap=L.map('radar-map',{attributionControl:true,zoomControl:true,scrollWheelZoom:false})
+    .setView([FALLBACK.lat,FALLBACK.lon],7);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+    subdomains:'abcd',maxZoom:19,attribution:'© OpenStreetMap, © CARTO'
+  }).addTo(radarMap);
+  radarMarker=L.circleMarker([FALLBACK.lat,FALLBACK.lon],{radius:6,color:'#f5c842',weight:2,fillColor:'#f5c842',fillOpacity:.9}).addTo(radarMap);
+  radarLoc={lat:FALLBACK.lat,lon:FALLBACK.lon};
+  fetchRadarFrames();
+}
+function radarSetCenter(lat,lon){
+  if(!radarMap)return;
+  radarMap.setView([lat,lon],radarMap.getZoom()||7);
+  if(radarMarker)radarMarker.setLatLng([lat,lon]);
+  radarLoc={lat,lon};
+  radarSampleAtLocation();
+}
+function radarTileCoords(lat,lon,z){
+  const n=Math.pow(2,z);
+  const x=(lon+180)/360*n;
+  const rad=lat*Math.PI/180;
+  const y=(1-Math.log(Math.tan(rad)+1/Math.cos(rad))/Math.PI)/2*n;
+  return{tx:Math.floor(x),ty:Math.floor(y),px:Math.floor((x-Math.floor(x))*256),py:Math.floor((y-Math.floor(y))*256)};
+}
+function radarClassifyPixel(d){
+  const[r,g,b,a]=d;
+  if(a<25)return null;
+  if(r>150&&g<150)return{level:'stark',label:'kräftiger Regen'};
+  if(g>140&&b<150)return{level:'mittel',label:'mäßiger Regen'};
+  return{level:'leicht',label:'leichter Regen'};
+}
+function radarSetFlag(info){
+  const el=document.getElementById('radar-flag');
+  if(!el)return;
+  if(!info){el.style.display='none';el.className='radar-flag';return;}
+  el.style.display='inline-flex';
+  el.textContent=`📡 Laut Radar: ${info.label}`;
+  el.className='radar-flag '+info.level;
+}
+function radarSampleAtLocation(){
+  if(!radarLoc||!radarFrames.length||!radarHost){radarSetFlag(null);return;}
+  const frame=radarFrames[radarIndex];
+  if(!frame)return;
+  const z=7;
+  const{tx,ty,px,py}=radarTileCoords(radarLoc.lat,radarLoc.lon,z);
+  const url=`${radarHost}${frame.path}/256/${z}/${tx}/${ty}/2/1_1.png`;
+  const seq=++radarSampleSeq;
+  const img=new Image();
+  img.crossOrigin='anonymous';
+  img.onload=()=>{
+    if(seq!==radarSampleSeq)return;
+    if(!radarSampleCanvas){
+      radarSampleCanvas=document.createElement('canvas');
+      radarSampleCanvas.width=256;radarSampleCanvas.height=256;
+      radarSampleCtx=radarSampleCanvas.getContext('2d');
+    }
+    radarSampleCtx.clearRect(0,0,256,256);
+    radarSampleCtx.drawImage(img,0,0);
+    try{
+      const d=radarSampleCtx.getImageData(px,py,1,1).data;
+      radarSetFlag(radarClassifyPixel(d));
+    }catch(e){radarSetFlag(null);}
+  };
+  img.onerror=()=>{if(seq===radarSampleSeq)radarSetFlag(null);};
+  img.src=url;
+}
+async function fetchRadarFrames(){
+  if(!radarMap)return;
+  try{
+    const r=await fetch('https://api.rainviewer.com/public/weather-maps.json');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    radarHost=j.host;
+    radarFrames=[...(j.radar?.past||[]),...(j.radar?.nowcast||[])];
+    radarPastLen=(j.radar?.past||[]).length;
+    if(!radarFrames.length)throw new Error('Keine Radardaten verfügbar');
+    radarIndex=radarPastLen-1;
+    const slider=document.getElementById('radar-slider');
+    slider.max=radarFrames.length-1;
+    slider.value=radarIndex;
+    radarBuildTicks();
+    radarRenderFrame(radarIndex);
+    const futureSteps=radarFrames.length-radarPastLen;
+    const futureMin=futureSteps*radarFrameStepMin();
+    document.getElementById('radar-note').textContent=futureSteps>0
+      ? `Vergangene ~2 Std. + ${futureMin} Min. Kurzfrist-Prognose (RainViewer) — Prognose ist kein garantierter Teil der kostenlosen API, Verlässlichkeit nimmt Richtung Prognose-Ende ab.`
+      : 'Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.';
+  }catch(e){
+    document.getElementById('radar-time').textContent='Radar nicht verfügbar';
+    document.getElementById('radar-note').textContent='Radardaten konnten nicht geladen werden.';
+  }
+}
+function radarFrameStepMin(){
+  if(radarFrames.length<2)return 10;
+  return Math.round((radarFrames[1].time-radarFrames[0].time)/60)||10;
+}
+function radarBuildTicks(){
+  const wrap=document.getElementById('radar-ticks');
+  const n=radarFrames.length;
+  if(n<2){wrap.innerHTML='';return;}
+  let html='';
+  radarFrames.forEach((f,i)=>{
+    const pct=(i/(n-1))*100;
+    const isNow=i===radarPastLen-1;
+    const d=new Date(f.time*1000);
+    const isHour=d.getMinutes()<10;
+    if(isNow){
+      html+=`<div class="radar-tick now" style="left:${pct}%"></div><div class="radar-tick-label now" style="left:${pct}%">Jetzt</div>`;
+    }else if(isHour){
+      const lbl=d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+      html+=`<div class="radar-tick hour" style="left:${pct}%"></div><div class="radar-tick-label" style="left:${pct}%">${lbl}</div>`;
+    }else{
+      html+=`<div class="radar-tick" style="left:${pct}%"></div>`;
+    }
+  });
+  wrap.innerHTML=html;
+}
+function radarRenderFrame(i){
+  const frame=radarFrames[i];
+  if(!frame||!radarMap)return;
+  const url=`${radarHost}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
+  if(radarLayer)radarLayer.setUrl(url);
+  else radarLayer=L.tileLayer(url,{opacity:.75,maxNativeZoom:12}).addTo(radarMap);
+  const offsetMin=(i-(radarPastLen-1))*radarFrameStepMin();
+  const isForecast=i>=radarPastLen;
+  const label=offsetMin===0?'Jetzt':(offsetMin>0?`Prognose +${offsetMin} Min.`:`${Math.abs(offsetMin)} Min. zurück`);
+  document.getElementById('radar-time').textContent=label;
+  const badge=document.getElementById('radar-badge');
+  badge.textContent=isForecast?'PROGNOSE':'LIVE';
+  badge.classList.toggle('forecast',isForecast);
+  radarSampleAtLocation();
+}
+function radarSeek(i){
+  radarIndex=+i;
+  radarRenderFrame(radarIndex);
+}
+function radarTogglePlay(){
+  const btn=document.getElementById('radar-play');
+  radarPlaying=!radarPlaying;
+  if(radarPlaying){
+    btn.textContent='⏸';
+    radarTimer=setInterval(()=>{
+      radarIndex=(radarIndex+1)%radarFrames.length;
+      document.getElementById('radar-slider').value=radarIndex;
+      radarRenderFrame(radarIndex);
+    },700);
+  }else{
+    btn.textContent='▶';
+    clearInterval(radarTimer);
+  }
+}
+
 // ── Favoriten & Standortwahl ─────────────────────────────────────────────────
 let favs=[];
 try{favs=JSON.parse(localStorage.getItem(FAVS_KEY)||'[]');}catch(e){}
@@ -1011,10 +1215,12 @@ function setLocation(name,sub){
   document.getElementById('loc-sub').textContent=sub;
 }
 function showLoading(){
-  document.getElementById('content').innerHTML=`<div class="card" style="padding:48px 24px;text-align:center;animation:fadeIn .4s"><div style="font-size:40px;margin-bottom:12px">⛅</div><div style="color:var(--text-dim)">Wetterdaten werden geladen…</div></div>`;
+  document.getElementById('content-top').innerHTML=`<div class="card" style="padding:48px 24px;text-align:center;animation:fadeIn .4s"><div style="font-size:40px;margin-bottom:12px">⛅</div><div style="color:var(--text-dim)">Wetterdaten werden geladen…</div></div>`;
+  document.getElementById('content-bottom').innerHTML='';
 }
 function showError(msg){
-  document.getElementById('content').innerHTML=`<div class="card" style="padding:40px 24px;text-align:center"><div style="font-size:36px;margin-bottom:10px">⚠️</div><div style="margin-bottom:6px;font-weight:600">Wetterdaten konnten nicht geladen werden</div><div style="font-size:13px;color:var(--text-dim);margin-bottom:18px">${msg}</div><button onclick="loadAll()" style="padding:10px 22px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;cursor:pointer">↻ Erneut versuchen</button></div>`;
+  document.getElementById('content-top').innerHTML=`<div class="card" style="padding:40px 24px;text-align:center"><div style="font-size:36px;margin-bottom:10px">⚠️</div><div style="margin-bottom:6px;font-weight:600">Wetterdaten konnten nicht geladen werden</div><div style="font-size:13px;color:var(--text-dim);margin-bottom:18px">${msg}</div><button onclick="loadAll()" style="padding:10px 22px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;cursor:pointer">↻ Erneut versuchen</button></div>`;
+  document.getElementById('content-bottom').innerHTML='';
 }
 
 let isLoading=false, hasRendered=false, lastTs='';
@@ -1059,6 +1265,8 @@ async function loadAll(){
     render(data);
     hasRendered=true;
     shownLoc={name:locName,lat,lon};
+    radarSetCenter(lat,lon);
+    fetchRadarFrames();
     updateFavBtn();
     renderCheckBadge(doubleCheck(data));
     lastTs=`${data.meta.ts} ${data.meta.ts_time}`;
@@ -1081,6 +1289,7 @@ async function loadAll(){
 // Start: zuletzt gespeicherte Daten sofort anzeigen, dann live aktualisieren
 renderChips();
 initFavDrag();
+initRadar();
 let cached=null;
 try{cached=JSON.parse(localStorage.getItem(CACHE_KEY)||'null');}catch(e){}
 if(cached&&cached.data&&cached.data.meta){
