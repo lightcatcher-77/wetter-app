@@ -44,10 +44,13 @@
     .loc-chips::-webkit-scrollbar{display:none;}
     .chip{flex-shrink:0;padding:7px 14px;border-radius:18px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;}
     .chip.active{border-color:rgba(245,200,66,.55);background:rgba(245,200,66,.1);color:var(--accent);}
-    .chip.fav{display:inline-flex;align-items:center;gap:7px;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;}
-    .chip.fav.dragging{cursor:grabbing;border-color:rgba(245,200,66,.6);box-shadow:0 10px 24px rgba(0,0,0,.4);transform:scale(1.05);pointer-events:none;z-index:50;}
+    .chip.fav{display:inline-flex;align-items:center;gap:7px;user-select:none;-webkit-user-select:none;}
+    .chip.fav.editing{touch-action:none;cursor:grab;border-style:dashed;border-color:rgba(245,200,66,.4);}
+    .chip.fav.dragging{cursor:grabbing;border-style:solid;border-color:rgba(245,200,66,.6);box-shadow:0 10px 24px rgba(0,0,0,.4);transform:scale(1.05);pointer-events:none;z-index:50;}
     .drop-indicator{flex-shrink:0;align-self:stretch;width:3px;border-radius:2px;background:var(--accent);box-shadow:0 0 6px rgba(245,200,66,.6);}
     .chip-remove{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:1;color:var(--text-dim);}
+    .edit-btn{flex-shrink:0;}
+    .edit-btn.active{border-color:rgba(245,200,66,.55);background:rgba(245,200,66,.1);color:var(--accent);}
     .chip-remove:hover{background:rgba(255,255,255,.15);color:var(--text);}
     .loc-search{margin-top:10px;text-align:left;}
     .loc-search .search-row{display:flex;gap:8px;}
@@ -916,7 +919,7 @@ function radarSetFlag(info){
   if(!info){
     if(modelExpectsRain){
       el.style.display='inline-flex';
-      el.textContent='📡 Laut Radar: kein Regen';
+      el.textContent='📡 Laut Radar: Kein Regen';
       el.className='radar-flag keins';
     }else{
       el.style.display='none';
@@ -929,8 +932,11 @@ function radarSetFlag(info){
   el.className='radar-flag '+info.level;
 }
 function radarSampleAtLocation(){
+  // Sampelt bewusst immer den "Jetzt"-Referenzframe (letzter Vergangenheits-Frame),
+  // unabhängig davon, welchen Zeitpunkt der Slider gerade anzeigt — das Badge im
+  // aktuellen Wetterstatus soll nicht durch Zurückspulen auf der Zeitleiste verfälscht werden.
   if(!radarLoc||!radarFrames.length||!radarHost){radarSetFlag(null);return;}
-  const frame=radarFrames[radarIndex];
+  const frame=radarFrames[radarPastLen-1];
   if(!frame)return;
   const z=7;
   const{tx,ty,px,py}=radarTileCoords(radarLoc.lat,radarLoc.lon,z);
@@ -971,6 +977,7 @@ async function fetchRadarFrames(){
     slider.value=radarIndex;
     radarBuildTicks();
     radarRenderFrame(radarIndex);
+    radarSampleAtLocation();
     const futureSteps=radarFrames.length-radarPastLen;
     const futureMin=futureSteps*radarFrameStepMin();
     document.getElementById('radar-note').textContent=futureSteps>0
@@ -1019,7 +1026,6 @@ function radarRenderFrame(i){
   const badge=document.getElementById('radar-badge');
   badge.textContent=isForecast?'PROGNOSE':'LIVE';
   badge.classList.toggle('forecast',isForecast);
-  radarSampleAtLocation();
 }
 function radarSeek(i){
   radarIndex=+i;
@@ -1059,16 +1065,23 @@ function favIndexOf(l){return l?favs.findIndex(f=>favKey(f)===favKey(l)):-1;}
 function persistFavs(){try{localStorage.setItem(FAVS_KEY,JSON.stringify(favs));}catch(e){}}
 function persistLoc(){try{localStorage.setItem(LASTLOC_KEY,JSON.stringify(activeLoc));}catch(e){}}
 
+let favEditMode=false;
 function renderChips(){
   const geoActive=activeLoc.mode==='geo';
   let html=`<button class="chip ${geoActive?'active':''}" onclick="selectGeo()">📍 Mein Standort</button>`;
   html+=favs.map(f=>{
     const key=favKey(f);
     const active=!geoActive&&favKey(activeLoc)===key;
-    return `<div class="chip fav ${active?'active':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="favChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();favChipClick('${esc(key)}')}"><span class="chip-label">★ ${esc(f.name)}</span><span class="chip-remove" title="Favorit entfernen" onclick="event.stopPropagation();removeFavByKey('${esc(key)}')">✕</span></div>`;
+    const removeBtn=favEditMode?`<span class="chip-remove" title="Favorit entfernen" onclick="event.stopPropagation();removeFavByKey('${esc(key)}')">✕</span>`:'';
+    return `<div class="chip fav ${active?'active':''} ${favEditMode?'editing':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="favChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();favChipClick('${esc(key)}')}"><span class="chip-label">★ ${esc(f.name)}</span>${removeBtn}</div>`;
   }).join('');
   html+=`<button class="chip add-btn" onclick="toggleSearch()">＋ Ort suchen</button>`;
+  if(favs.length)html+=`<button class="chip edit-btn ${favEditMode?'active':''}" onclick="toggleFavEditMode()" title="Favoriten bearbeiten">${favEditMode?'✓ Fertig':'☰'}</button>`;
   document.getElementById('loc-chips').innerHTML=html;
+}
+function toggleFavEditMode(){
+  favEditMode=!favEditMode;
+  renderChips();
 }
 function selectGeo(){
   activeLoc={mode:'geo'};
@@ -1102,6 +1115,7 @@ function initFavDrag(){
   el.addEventListener('pointercancel',favDragEnd);
 }
 function favDragStart(e){
+  if(!favEditMode)return;
   if(e.target.closest('.chip-remove'))return;
   const chip=e.target.closest('.chip.fav');
   if(!chip)return;
