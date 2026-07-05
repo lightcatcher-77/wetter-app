@@ -12,7 +12,6 @@
   <title>Wetter Live</title>
   <script src="chart.umd.js"></script>
   <style>
-    @font-face{font-family:'DM Serif Display';font-style:normal;font-weight:400;font-display:swap;src:url('fonts/dm-serif.woff2') format('woff2');}
     @font-face{font-family:'Outfit';font-style:normal;font-weight:300 700;font-display:swap;src:url('fonts/outfit.woff2') format('woff2');}
     :root {
       color-scheme: light;
@@ -29,7 +28,7 @@
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
     @keyframes spin{to{transform:rotate(360deg)}}
     .header{text-align:center;margin-bottom:28px;animation:fadeIn .6s;position:relative;}
-    .header h1{font-family:'DM Serif Display',serif;font-size:clamp(28px,5.5vw,46px);font-weight:400;line-height:1.1;margin:10px 0 6px;}
+    .header h1{font-family:'Outfit',sans-serif;font-size:clamp(28px,5.5vw,46px);font-weight:400;line-height:1.1;margin:10px 0 6px;}
     .accent{color:var(--accent);}
     .sub{font-size:13px;color:var(--text-dim);font-weight:300;}
     .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;background:rgba(86,214,140,.12);border:1px solid rgba(86,214,140,.3);color:var(--green);margin:0 44px 10px;max-width:calc(100% - 88px);}
@@ -43,6 +42,11 @@
     .loc-chips::-webkit-scrollbar{display:none;}
     .chip{flex-shrink:0;padding:7px 14px;border-radius:18px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;}
     .chip.active{border-color:rgba(245,200,66,.55);background:rgba(245,200,66,.1);color:var(--accent);}
+    .chip.fav{display:inline-flex;align-items:center;gap:7px;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;}
+    .chip.fav.dragging{cursor:grabbing;border-color:rgba(245,200,66,.6);box-shadow:0 10px 24px rgba(0,0,0,.4);transform:scale(1.05);pointer-events:none;z-index:50;}
+    .drop-indicator{flex-shrink:0;align-self:stretch;width:3px;border-radius:2px;background:var(--accent);box-shadow:0 0 6px rgba(245,200,66,.6);}
+    .chip-remove{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:1;color:var(--text-dim);}
+    .chip-remove:hover{background:rgba(255,255,255,.15);color:var(--text);}
     .loc-search{margin-top:10px;text-align:left;}
     .loc-search .search-row{display:flex;gap:8px;}
     .loc-search input{flex:1;padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;outline:none;}
@@ -60,7 +64,7 @@
     .hero{display:grid;grid-template-columns:1.1fr 0.9fr;gap:14px;margin-bottom:14px;animation:slideUp .55s;}
     .hero-main{padding:32px 24px;text-align:center;}
     .hero-main .big-icon{font-size:72px;line-height:1;display:block;margin-bottom:10px;}
-    .hero-main .big-temp{font-family:'DM Serif Display',serif;font-size:64px;font-weight:400;line-height:1;}
+    .hero-main .big-temp{font-family:'Outfit',sans-serif;font-size:64px;font-weight:400;line-height:1;}
     .hero-main .big-unit{font-size:28px;color:var(--text-dim);vertical-align:super;}
     .hero-main .condition{font-size:16px;color:var(--text-dim);margin-top:10px;}
     .hero-main .feels{font-size:13px;color:var(--text-dim);margin-top:4px;}
@@ -71,7 +75,7 @@
     .stat-box.thunder-stat{background:rgba(245,200,66,.08);border:1px solid rgba(245,200,66,.3);}
     .stat-box.thunder-stat .sv{color:var(--accent);}
     .hourly-card{margin-bottom:14px;animation:slideUp .6s;}
-    .hourly-head{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
+    .hourly-head{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
     .hourly-scroll{overflow-x:auto;padding:0 16px 16px;}
     .hourly-inner{display:flex;gap:8px;width:max-content;}
     .h-cell{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:10px 8px;text-align:center;width:68px;flex-shrink:0;}
@@ -104,7 +108,7 @@
     .tap-hint{font-size:11px;color:var(--text-dim);text-align:center;margin:-6px 0 14px;}
     .day-detail{margin-bottom:14px;animation:slideUp .3s;position:relative;}
     .dd-close{position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text-dim);font-size:14px;cursor:pointer;line-height:1;}
-    .dd-head{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
+    .dd-head{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
     .dd-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 16px 16px;}
     .dd-seg{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:14px 8px;text-align:center;}
     .dd-lbl{font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--text-dim);text-transform:uppercase;}
@@ -118,7 +122,7 @@
     .chart-section{padding:22px;margin-bottom:14px;animation:slideUp .75s;}
     .chart-wrap{position:relative;height:260px;}
     @media(max-width:620px){.chart-wrap{height:300px;}}
-    .section-title{font-family:'DM Serif Display',serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
+    .section-title{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -127,7 +131,7 @@
     .score-bar{width:20px;border-radius:4px 4px 0 0;}
     .score-lbl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;}
     .verdict{padding:24px;animation:slideUp .9s;}
-    .verdict h3{font-family:'DM Serif Display',serif;font-size:22px;margin-bottom:12px;}
+    .verdict h3{font-family:'Outfit',sans-serif;font-size:22px;margin-bottom:12px;}
     .verdict p{font-size:14px;line-height:1.8;color:var(--text-dim);margin-bottom:14px;}
     .hl-box{background:rgba(86,214,140,.1);border:1px solid rgba(86,214,140,.25);border-radius:12px;padding:12px 16px;font-size:15px;font-weight:600;color:var(--green);text-align:center;}
     .footer{text-align:center;margin-top:24px;font-size:12px;color:var(--text-dim);animation:fadeIn 1s;}
@@ -147,7 +151,7 @@
     <div class="loc-chips" id="loc-chips"></div>
     <div class="loc-search" id="loc-search" style="display:none">
       <div class="search-row">
-        <input id="search-input" type="search" placeholder="Ort suchen, z. B. Berlin…" onkeydown="if(event.key==='Enter')runSearch()">
+        <input id="search-input" type="search" placeholder="Ort suchen, z. B. Berlin…" autocomplete="off" oninput="onSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runSearch();}">
         <button onclick="runSearch()">Suchen</button>
       </div>
       <div id="search-results"></div>
@@ -837,18 +841,106 @@ function persistLoc(){try{localStorage.setItem(LASTLOC_KEY,JSON.stringify(active
 function renderChips(){
   const geoActive=activeLoc.mode==='geo';
   let html=`<button class="chip ${geoActive?'active':''}" onclick="selectGeo()">📍 Mein Standort</button>`;
-  html+=favs.map((f,i)=>`<button class="chip ${!geoActive&&favKey(activeLoc)===favKey(f)?'active':''}" onclick="selectFav(${i})">★ ${esc(f.name)}</button>`).join('');
-  html+=`<button class="chip" onclick="toggleSearch()">＋ Ort suchen</button>`;
+  html+=favs.map(f=>{
+    const key=favKey(f);
+    const active=!geoActive&&favKey(activeLoc)===key;
+    return `<div class="chip fav ${active?'active':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="favChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();favChipClick('${esc(key)}')}"><span class="chip-label">★ ${esc(f.name)}</span><span class="chip-remove" title="Favorit entfernen" onclick="event.stopPropagation();removeFavByKey('${esc(key)}')">✕</span></div>`;
+  }).join('');
+  html+=`<button class="chip add-btn" onclick="toggleSearch()">＋ Ort suchen</button>`;
   document.getElementById('loc-chips').innerHTML=html;
 }
 function selectGeo(){
   activeLoc={mode:'geo'};
   persistLoc();renderChips();loadAll();
 }
-function selectFav(i){
-  const f=favs[i];if(!f)return;
+function favChipClick(key){
+  if(dragSuppressClick){dragSuppressClick=false;return;}
+  selectFavByKey(key);
+}
+function selectFavByKey(key){
+  const f=favs.find(x=>favKey(x)===key);if(!f)return;
   activeLoc={mode:'fixed',name:f.name,lat:f.lat,lon:f.lon};
   persistLoc();renderChips();loadAll();
+}
+function removeFavByKey(key){
+  const i=favs.findIndex(x=>favKey(x)===key);if(i<0)return;
+  const wasActive=!(activeLoc.mode==='geo')&&favKey(activeLoc)===key;
+  favs.splice(i,1);
+  persistFavs();
+  if(wasActive) selectGeo(); else renderChips();
+  updateFavBtn();
+}
+
+// ── Favoriten: Drag & Drop / Touch-Reihenfolge ───────────────────────────────
+let dragState=null, dragSuppressClick=false, dragIndicator=null;
+function initFavDrag(){
+  const el=document.getElementById('loc-chips');
+  el.addEventListener('pointerdown',favDragStart);
+  el.addEventListener('pointermove',favDragMove);
+  el.addEventListener('pointerup',favDragEnd);
+  el.addEventListener('pointercancel',favDragEnd);
+}
+function favDragStart(e){
+  if(e.target.closest('.chip-remove'))return;
+  const chip=e.target.closest('.chip.fav');
+  if(!chip)return;
+  dragState={pointerId:e.pointerId,el:chip,startX:e.clientX,startY:e.clientY,moved:false};
+}
+function favDragMove(e){
+  if(!dragState||e.pointerId!==dragState.pointerId)return;
+  const chip=dragState.el;
+  const dx=e.clientX-dragState.startX, dy=e.clientY-dragState.startY;
+  if(!dragState.moved){
+    if(Math.hypot(dx,dy)<6)return;
+    dragState.moved=true;
+    const r=chip.getBoundingClientRect();
+    dragState.origLeft=r.left;dragState.origTop=r.top;
+    try{chip.setPointerCapture(e.pointerId);}catch(err){}
+    dragIndicator=document.createElement('div');
+    dragIndicator.className='drop-indicator';
+    chip.parentNode.insertBefore(dragIndicator,chip);
+    chip.classList.add('dragging');
+    chip.style.position='fixed';
+    chip.style.left=r.left+'px';
+    chip.style.top=r.top+'px';
+    chip.style.width=r.width+'px';
+  }
+  e.preventDefault();
+  chip.style.left=(dragState.origLeft+dx)+'px';
+  chip.style.top=(dragState.origTop+dy)+'px';
+  const container=document.getElementById('loc-chips');
+  const siblings=[...container.querySelectorAll('.chip.fav')].filter(c=>c!==chip);
+  let placed=false;
+  for(const sib of siblings){
+    const r=sib.getBoundingClientRect();
+    if(e.clientX<r.left+r.width/2){
+      container.insertBefore(dragIndicator,sib);
+      placed=true;
+      break;
+    }
+  }
+  if(!placed){
+    const addBtn=container.querySelector('.chip.add-btn');
+    container.insertBefore(dragIndicator,addBtn||null);
+  }
+}
+function favDragEnd(e){
+  if(!dragState||e.pointerId!==dragState.pointerId)return;
+  const wasMoved=dragState.moved;
+  const chip=dragState.el;
+  if(wasMoved){
+    const container=document.getElementById('loc-chips');
+    container.insertBefore(chip,dragIndicator);
+    dragIndicator.remove();dragIndicator=null;
+    chip.classList.remove('dragging');
+    chip.style.position='';chip.style.left='';chip.style.top='';chip.style.width='';
+    const keys=[...container.querySelectorAll('.chip.fav')].map(c=>c.dataset.key);
+    favs=keys.map(k=>favs.find(f=>favKey(f)===k)).filter(Boolean);
+    persistFavs();
+    dragSuppressClick=true;
+    renderChips();
+  }
+  dragState=null;
 }
 function toggleSearch(show){
   const el=document.getElementById('loc-search');
@@ -857,20 +949,35 @@ function toggleSearch(show){
   if(vis)document.getElementById('search-input').focus();
   else document.getElementById('search-results').innerHTML='';
 }
-async function runSearch(){
+let searchDebounce=null, searchReqId=0;
+function onSearchInput(){
+  clearTimeout(searchDebounce);
   const q=document.getElementById('search-input').value.trim();
-  if(!q)return;
   const box=document.getElementById('search-results');
+  if(q.length<2){searchReqId++;box.innerHTML='';return;}
+  searchDebounce=setTimeout(runSearch,300);
+}
+async function runSearch(){
+  clearTimeout(searchDebounce);
+  const q=document.getElementById('search-input').value.trim();
+  const box=document.getElementById('search-results');
+  if(!q){box.innerHTML='';return;}
+  const myId=++searchReqId;
   box.innerHTML='<div class="sr-note">Suche…</div>';
   try{
     const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=de&format=json`);
+    if(myId!==searchReqId)return;
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
+    if(myId!==searchReqId)return;
     searchResults=(j.results||[]).map(x=>({name:x.name,lat:x.latitude,lon:x.longitude,info:[x.admin1,x.country].filter(Boolean).join(', ')}));
     box.innerHTML=searchResults.length
       ?searchResults.map((x,i)=>`<button class="sr-item" onclick="pickResult(${i})">${esc(x.name)}<span>${esc(x.info)}</span></button>`).join('')
       :'<div class="sr-note">Kein Ort gefunden.</div>';
-  }catch(e){box.innerHTML='<div class="sr-note">Suche fehlgeschlagen — bitte erneut versuchen.</div>';}
+  }catch(e){
+    if(myId!==searchReqId)return;
+    box.innerHTML='<div class="sr-note">Suche fehlgeschlagen — bitte erneut versuchen.</div>';
+  }
 }
 function pickResult(i){
   const x=searchResults[i];if(!x)return;
@@ -973,6 +1080,7 @@ async function loadAll(){
 
 // Start: zuletzt gespeicherte Daten sofort anzeigen, dann live aktualisieren
 renderChips();
+initFavDrag();
 let cached=null;
 try{cached=JSON.parse(localStorage.getItem(CACHE_KEY)||'null');}catch(e){}
 if(cached&&cached.data&&cached.data.meta){
