@@ -93,6 +93,7 @@
     .radar-flag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 11px;border-radius:10px;margin-top:10px;background:rgba(107,163,214,.14);border:1px solid rgba(107,163,214,.35);color:var(--blue);}
     .radar-flag.mittel{background:rgba(86,214,140,.14);border-color:rgba(86,214,140,.35);color:var(--green);}
     .radar-flag.stark{background:rgba(235,87,87,.14);border-color:rgba(235,87,87,.4);color:var(--red);}
+    .radar-flag.keins{background:var(--card);border-color:var(--border);color:var(--text-dim);}
     .hero-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:16px;align-content:center;}
     .stat-box{background:rgba(255,255,255,0.05);border-radius:12px;padding:14px 10px;text-align:center;}
     .stat-box .sv{font-size:20px;font-weight:600;}
@@ -272,6 +273,7 @@ function render(data){
   if(chartInst){chartInst.destroy();chartInst=null;}
   selDay=-1;
   const cur=data.current,m=data.meta;
+  modelExpectsRain=isRainCode(cur.weatherCode);
   // Client-side filter: immer ab heute (Ortszeit), max 7 Tage — funktioniert auch wenn Daten 1-2 Tage alt sind
   const _p=locParts(m&&m.utcOffset);
   const _todayMid=new Date(_p.y,_p.mo-1,_p.d);
@@ -675,7 +677,7 @@ function buildWeatherData(raw, rawM, ensRain){
   const current = {
     temp: Math.round(cur.temperature_2m),
     feelsLike: Math.round(cur.apparent_temperature),
-    icon: ico, condition: cond,
+    icon: ico, condition: cond, weatherCode: cur.weather_code,
     wind: Math.round(cur.wind_speed_10m),
     windDir: windDirLbl(cur.wind_direction_10m),
     rain_pct: raw.daily.precipitation_probability_max[0] || 0,
@@ -911,7 +913,17 @@ function radarClassifyPixel(d){
 function radarSetFlag(info){
   const el=document.getElementById('radar-flag');
   if(!el)return;
-  if(!info){el.style.display='none';el.className='radar-flag';return;}
+  if(!info){
+    if(modelExpectsRain){
+      el.style.display='inline-flex';
+      el.textContent='📡 Laut Radar: kein Regen';
+      el.className='radar-flag keins';
+    }else{
+      el.style.display='none';
+      el.className='radar-flag';
+    }
+    return;
+  }
   el.style.display='inline-flex';
   el.textContent=`📡 Laut Radar: ${info.label}`;
   el.className='radar-flag '+info.level;
@@ -1036,6 +1048,11 @@ let activeLoc={mode:'geo'};
 try{const l=JSON.parse(localStorage.getItem(LASTLOC_KEY)||'null');if(l&&l.mode)activeLoc=l;}catch(e){}
 let shownLoc=null; // {name,lat,lon} des aktuell angezeigten Orts
 let searchResults=[];
+let modelExpectsRain=false; // Modell zeigt gerade Niederschlag (für Radar-Abgleich)
+function isRainCode(c){
+  c=Math.round(c||0);
+  return (c>=51&&c<=59)||(c>=61&&c<=69)||(c>=80&&c<=82)||(c>=95&&c<=99);
+}
 
 function favKey(l){return `${(+l.lat).toFixed(2)},${(+l.lon).toFixed(2)}`;}
 function favIndexOf(l){return l?favs.findIndex(f=>favKey(f)===favKey(l)):-1;}
