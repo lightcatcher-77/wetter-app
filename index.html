@@ -151,6 +151,9 @@
     .chart-section{padding:22px;margin-bottom:14px;animation:slideUp .75s;}
     .chart-wrap{position:relative;height:260px;}
     @media(max-width:620px){.chart-wrap{height:300px;}}
+    .chart-model-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--text-dim);}
+    .chart-model-legend span{display:inline-flex;align-items:center;gap:6px;}
+    .chart-model-legend .dot{width:8px;height:8px;border-radius:50%;flex:none;}
     .section-title{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
     .section-title.collapsible{cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;margin-bottom:0;}
     .section-title.collapsible .chevron{font-size:14px;transition:transform .25s ease;color:var(--text-dim);}
@@ -233,6 +236,12 @@ const FALLBACK = { lat: 47.5676, lon: 10.7012, name: 'Füssen' };
 const MODELS = ['icon_seamless','ecmwf_ifs025','gfs_seamless','meteofrance_seamless'];
 const MODEL_LBL = { icon_seamless:'DWD ICON', ecmwf_ifs025:'ECMWF', gfs_seamless:'NOAA GFS', meteofrance_seamless:'Météo-France' };
 const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
+// Dieselben Modellfarben als konkrete Hex-Werte — Canvas kann var(--x) nicht auflösen.
+const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
+function hexToRgba(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
 const CACHE_KEY = 'wetter-live-cache-v1';
 const FAVS_KEY = 'wetter-favs-v1';
 const LASTLOC_KEY = 'wetter-lastloc-v1';
@@ -426,6 +435,11 @@ function render(data){
       <div class="section-title collapsible" onclick="toggleSection(this,'chart-body')">🌡️ Temperaturverlauf<span class="chevron">▾</span></div>
       <div class="collapse-body" id="chart-body">
         <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+        <div class="chart-model-legend">
+          ${MODELS.filter(m=>fc.some(r=>r.modelVals&&r.modelVals[m]&&(r.modelVals[m].max!=null||r.modelVals[m].min!=null))).map(m=>
+            `<span><span class="dot" style="background:${MODEL_COLOR[m]}"></span>${MODEL_LBL[m]}</span>`
+          ).join('')}
+        </div>
       </div>
     </div>
     ${renderModelMatrix(fc)}
@@ -454,25 +468,33 @@ function render(data){
   setTimeout(()=>{
     const ctx=document.getElementById('tempChart');
     if(!ctx)return;
-    // Unauffällige Einzelmodell-Linien: zeigen die Streuung hinter den fett
-    // hervorgehobenen Median-Linien (Max/Min), sichtbar beim Hovern über einen Tag.
+    // Einzelmodell-Linien: je Modell in dessen eigener Farbe (wie im Modellvergleich),
+    // damit jeder Punkt beim Hovern einem Modell zuordenbar ist. Linie selbst bleibt
+    // gedämpft, damit der Chart in Ruhe nicht überladen wirkt — die Punktfarbe ist voll
+    // gesättigt und liefert zusammen mit der Legende unter dem Chart die Zuordnung.
     const modelDatasets=[];
     MODELS.forEach(m=>{
+      const hex=MODEL_HEX[m];
       const maxArr=fc.map(r=>r.modelVals&&r.modelVals[m]&&r.modelVals[m].max!=null?r.modelVals[m].max:null);
       const minArr=fc.map(r=>r.modelVals&&r.modelVals[m]&&r.modelVals[m].min!=null?r.modelVals[m].min:null);
-      if(maxArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Max`,data:maxArr,borderColor:'rgba(245,200,66,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(245,200,66,.55)',tension:0.4,spanGaps:true});
-      if(minArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Min`,data:minArr,borderColor:'rgba(107,163,214,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(107,163,214,.55)',tension:0.4,spanGaps:true});
+      if(maxArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Max`,_model:m,data:maxArr,borderColor:hexToRgba(hex,.4),backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:hex,pointHoverBackgroundColor:hex,tension:0.4,spanGaps:true});
+      if(minArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Min`,_model:m,data:minArr,borderColor:hexToRgba(hex,.4),backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:hex,pointHoverBackgroundColor:hex,tension:0.4,spanGaps:true});
     });
-    // Ersetzt die Standard-Tooltip-Box (die sonst alle ~10 Datasets inkl. der
-    // unauffälligen Modell-Spaghetti-Linien aufgelistet hätte) durch zwei kompakte
-    // Beschriftungen direkt am Max-/Min-Punkt, vertikal sortiert wie die Kurve
-    // selbst verläuft und per dünner Linie mit ihrem Punkt verbunden.
+    // Ersetzt die Standard-Tooltip-Box durch Beschriftungen direkt an jedem aktiven
+    // Punkt (Konsens + je Modell), vertikal sortiert wie die Kurven verlaufen und
+    // per dünner Linie in der jeweiligen Farbe mit ihrem Punkt verbunden. Konsens
+    // (Max/Min) etwas größer & fett — das ist die Hauptaussage, Modellwerte sind
+    // die kleineren Detail-Labels darunter/darüber.
+    function resolveDsColor(ds,idx){
+      const c=ds.pointBackgroundColor;
+      return Array.isArray(c)?c[idx]:c;
+    }
     const pointLabelPlugin={
       id:'pointLabels',
       afterDatasetsDraw(chart){
         const active=chart.getActiveElements().filter(a=>{
-          const lbl=chart.data.datasets[a.datasetIndex].label;
-          return lbl==='Max °C'||lbl==='Min °C';
+          const val=chart.data.datasets[a.datasetIndex].data[a.index];
+          return val!=null&&Number.isFinite(a.element.y);
         });
         if(!active.length) return;
         const {ctx,chartArea:area}=chart;
@@ -486,30 +508,32 @@ function render(data){
 
         const items=active.map(a=>{
           const ds=chart.data.datasets[a.datasetIndex];
-          return {px:a.element.x,py:a.element.y,val:ds.data[a.index],color:ds.label==='Max °C'?'#f5c842':'#6ba3d6'};
-        }).sort((p,q)=>p.py-q.py); // oben zuerst = wie die Kurve verläuft
+          const primary=ds.label==='Max °C'||ds.label==='Min °C';
+          return {px:a.element.x,py:a.element.y,val:ds.data[a.index],color:resolveDsColor(ds,a.index),primary};
+        }).sort((p,q)=>p.py-q.py); // oben zuerst = wie die Kurven verlaufen
 
         const onRight=hoverX<area.right-76;
-        const gap=16;
+        const gap=14;
         let prevEdge=null;
         items.forEach(it=>{
+          const boxH=it.primary?19:15;
           const lx=onRight?it.px+gap:it.px-gap;
           let ly=it.py;
-          if(prevEdge!=null&&ly<prevEdge) ly=prevEdge;
-          prevEdge=ly+22;
+          if(prevEdge!=null&&ly<prevEdge+boxH/2) ly=prevEdge+boxH/2;
+          prevEdge=ly+boxH/2;
 
           ctx.beginPath();
-          ctx.strokeStyle=it.color;ctx.globalAlpha=.65;ctx.lineWidth=1;
+          ctx.strokeStyle=it.color;ctx.globalAlpha=it.primary?.65:.45;ctx.lineWidth=1;
           ctx.moveTo(it.px,it.py);ctx.lineTo(lx,ly);ctx.stroke();
           ctx.globalAlpha=1;
 
           const text=`${Math.round(it.val)}°`;
-          ctx.font='600 12px Outfit, sans-serif';
+          ctx.font=(it.primary?'600 12px':'500 10.5px')+' Outfit, sans-serif';
           const tw=ctx.measureText(text).width;
-          const boxW=tw+14,boxH=20;
+          const boxW=tw+(it.primary?14:10);
           const bx=onRight?lx:lx-boxW;
           const by=ly-boxH/2;
-          ctx.fillStyle='rgba(10,20,32,.92)';
+          ctx.fillStyle=it.primary?'rgba(10,20,32,.92)':'rgba(10,20,32,.78)';
           ctx.strokeStyle=it.color;ctx.lineWidth=1;
           roundRectPath(ctx,bx,by,boxW,boxH,6);
           ctx.fill();ctx.stroke();
