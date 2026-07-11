@@ -152,6 +152,27 @@
     .chart-wrap{position:relative;height:260px;}
     @media(max-width:620px){.chart-wrap{height:300px;}}
     .section-title{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
+    .section-title.collapsible{cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;margin-bottom:0;}
+    .section-title.collapsible .chevron{font-size:14px;transition:transform .25s ease;color:var(--text-dim);}
+    .section-title.collapsible.open .chevron{transform:rotate(180deg);}
+    .collapse-body{max-height:0;overflow:hidden;transition:max-height .35s ease,opacity .3s ease;opacity:0;}
+    .collapse-body.open{max-height:900px;opacity:1;margin-top:16px;}
+    .model-matrix-card{padding:22px;margin-bottom:14px;animation:slideUp .78s;}
+    .mm-scroll{overflow-x:auto;}
+    .model-matrix{display:grid;gap:3px;}
+    .mm-head{font-size:10.5px;color:var(--text-dim);text-align:center;padding-bottom:4px;}
+    .mm-row-label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);padding-right:6px;white-space:nowrap;}
+    .mm-row-label.konsens{font-weight:700;}
+    .mm-dot{width:8px;height:8px;border-radius:50%;flex:none;}
+    .mm-cell{border-radius:8px;text-align:center;padding:6px 2px 5px;font-size:14px;}
+    .mm-cell .mm-pct{display:block;font-size:11px;font-weight:600;color:var(--text);margin-top:2px;}
+    .mm-cell .mm-mm{display:block;font-size:9px;color:var(--text-dim);margin-top:1px;}
+    .mm-konsens{background:rgba(245,200,66,.08);border-radius:8px;text-align:center;padding:6px 2px 5px;}
+    .mm-konsens .mm-pct{font-size:14px;font-weight:700;color:var(--accent);}
+    .mm-konsens .mm-spread{display:block;font-size:9.5px;color:var(--text-dim);margin-top:2px;}
+    .mm-sep{grid-column:1/-1;border-top:1px solid var(--border);margin:2px 0;}
+    .mm-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--text-dim);}
+    .mm-legend span{display:inline-flex;align-items:center;gap:6px;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -211,6 +232,7 @@
 const FALLBACK = { lat: 47.5676, lon: 10.7012, name: 'Füssen' };
 const MODELS = ['icon_seamless','ecmwf_ifs025','gfs_seamless','meteofrance_seamless'];
 const MODEL_LBL = { icon_seamless:'DWD ICON', ecmwf_ifs025:'ECMWF', gfs_seamless:'NOAA GFS', meteofrance_seamless:'Météo-France' };
+const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
 const CACHE_KEY = 'wetter-live-cache-v1';
 const FAVS_KEY = 'wetter-favs-v1';
 const LASTLOC_KEY = 'wetter-lastloc-v1';
@@ -219,7 +241,7 @@ function mainUrl(lat,lon){
   return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,uv_index&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunshine_duration,wind_speed_10m_max,sunrise,sunset&timezone=auto&forecast_days=9`;
 }
 function modelsUrl(lat,lon){
-  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&models=${MODELS.join(',')}&timezone=auto&forecast_days=9`;
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,weather_code&models=${MODELS.join(',')}&timezone=auto&forecast_days=9`;
 }
 function ensembleUrl(lat,lon){
   return `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lon}&hourly=precipitation&models=icon_seamless&timezone=auto&forecast_days=9`;
@@ -269,6 +291,57 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
     return`<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}</div>`;
   });
   return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div></div>`;
+}
+
+// Modellvergleich: Regenrisiko, -menge & Wetterlage je Modell nebeneinander.
+// Konsens-Zeile nutzt dieselbe lead-time-abhängige Gewichtung wie der Temperaturchart
+// (W_NEAR/W_FAR, siehe weightsForDay) — ICON zählt in den ersten 2 Tagen mehr, danach ECMWF.
+function renderModelMatrix(fc){
+  const activeModels = MODELS.filter(m=>fc.some(r=>r.modelVals&&r.modelVals[m]&&r.modelVals[m].rain!=null));
+  if(activeModels.length<2) return '';
+  const n=fc.length;
+  const head=`<div></div>${fc.map(r=>`<div class="mm-head">${r.wd} ${r.date}</div>`).join('')}`;
+  // Konsens zeigt bewusst denselben Regenwert wie Tageskarte/Hero oben (rain: Ensemble-Priorität,
+  // sonst gewichteter Modell-Median) — nur die Streuung (rainSpread, reine Modellspanne) ist zusätzlich.
+  const konsens=`<div class="mm-row-label konsens">⌀ Konsens</div>${fc.map(r=>{
+    const sp=r.rainSpread||0;
+    return `<div class="mm-konsens"><span class="mm-pct">${r.rain}%</span>${sp>=15?`<span class="mm-spread">⇅±${Math.round(sp/2)}%</span>`:''}</div>`;
+  }).join('')}`;
+  const rows=activeModels.map(m=>{
+    const label=`<div class="mm-row-label"><span class="mm-dot" style="background:${MODEL_COLOR[m]}"></span>${MODEL_LBL[m]}</div>`;
+    const cells=fc.map(r=>{
+      const v=r.modelVals&&r.modelVals[m];
+      if(!v||v.rain==null) return `<div class="mm-cell">–</div>`;
+      const op=Math.min(0.6,(v.rain/100)*0.6).toFixed(2);
+      return `<div class="mm-cell" style="background:rgba(107,163,214,${op})">${v.icon||''}<span class="mm-pct">${v.rain}%</span>${v.mm>=0.1?`<span class="mm-mm">${v.mm}mm</span>`:''}</div>`;
+    }).join('');
+    return label+cells;
+  }).join('');
+  return `<div class="card model-matrix-card">
+    <div class="section-title collapsible" onclick="toggleSection(this,'mm-body')">🌦️ Modellvergleich<span class="chevron">▾</span></div>
+    <div class="collapse-body" id="mm-body">
+      <div class="mm-scroll"><div class="model-matrix" style="grid-template-columns:78px repeat(${n},minmax(64px,1fr))">
+        ${head}${konsens}<div class="mm-sep"></div>${rows}
+      </div></div>
+      <div class="mm-legend">
+        <span><strong style="color:var(--accent)">⌀ Konsens</strong> = Regenwahrscheinlichkeit wie oben in der Tagesübersicht</span>
+        <span>⇅ = Streuung zwischen den Modellen (ab 15 Punkten Unterschied)</span>
+        <span>Zellfarbe = Regenwahrscheinlichkeit je Modell · mm = erwartete Regenmenge</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Auf-/Zuklappen von Temperaturchart & Modellvergleich (beide standardmäßig eingeklappt).
+// Chart.js misst beim ersten Aufklappen ggf. eine 0-Breite (Canvas war noch nie sichtbar) —
+// deshalb hier ein resize() nachschieben, statt uns auf die Erstmessung zu verlassen.
+function toggleSection(headEl,bodyId){
+  headEl.classList.toggle('open');
+  const body=document.getElementById(bodyId);
+  body.classList.toggle('open');
+  if(bodyId==='chart-body'&&body.classList.contains('open')&&chartInst){
+    setTimeout(()=>chartInst.resize(),360);
+  }
 }
 
 let chartInst=null,lastFc=[],selDay=-1;
@@ -341,9 +414,12 @@ function render(data){
 
   const htmlBottom=`
     <div class="card chart-section">
-      <div class="section-title">🌡️ Temperaturverlauf</div>
-      <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+      <div class="section-title collapsible" onclick="toggleSection(this,'chart-body')">🌡️ Temperaturverlauf<span class="chevron">▾</span></div>
+      <div class="collapse-body" id="chart-body">
+        <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+      </div>
     </div>
+    ${renderModelMatrix(fc)}
     <div class="card scores-card">
       <div class="section-title">🥾 Outdoor-Score (10 = ideal)</div>
       <div class="score-grid" style="grid-template-columns:repeat(${n},1fr)">
@@ -768,12 +844,15 @@ function buildWeatherData(raw, rawM, ensRain){
     let tmin = raw.daily.temperature_2m_min[i];
     let rain = raw.daily.precipitation_probability_max[i] || 0;
     let spread = 0, mdetail = '', modelVals = {};
+    let rainModelWeighted = null, rainSpread = 0;
     const mi = mDayIdx[ds];
     if (mi!=null) {
       const w = weightsForDay(i);
       const pMax = modelPairs(rawM.daily,'temperature_2m_max',mi);
       const pMin = modelPairs(rawM.daily,'temperature_2m_min',mi);
       const pRain = modelPairs(rawM.daily,'precipitation_probability_max',mi);
+      const pMm = modelPairs(rawM.daily,'precipitation_sum',mi);
+      const pCode = modelPairs(rawM.daily,'weather_code',mi);
       if (pMax.length>=2) {
         const vals=pMax.map(p=>p[1]);
         tmax = weightedMedian(pMax,w);
@@ -781,10 +860,23 @@ function buildWeatherData(raw, rawM, ensRain){
         mdetail = pMax.map(([m,v])=>`${MODEL_LBL[m]} ${Math.round(v)}°`).join(' · ');
       }
       if (pMin.length>=2) tmin = weightedMedian(pMin,w);
-      if (pRain.length>=2) rain = weightedMedian(pRain,w);
-      // Einzelwerte je Modell für den Temperaturchart (Max + Min, gerundet)
+      if (pRain.length>=2) {
+        rain = weightedMedian(pRain,w);
+        rainModelWeighted = Math.round(rain);
+        const rvals=pRain.map(p=>p[1]);
+        rainSpread = Math.round(Math.max(...rvals)-Math.min(...rvals));
+      }
+      // Einzelwerte je Modell für Temperaturchart & Modellvergleich (Max, Min, Regen%, mm, Icon)
       pMax.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].max=Math.round(v); });
       pMin.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].min=Math.round(v); });
+      pRain.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].rain=Math.round(v); });
+      pMm.forEach(([m,v])=>{ modelVals[m]=modelVals[m]||{}; modelVals[m].mm=Math.round(v*10)/10; });
+      pCode.forEach(([m,v])=>{
+        modelVals[m]=modelVals[m]||{};
+        const mRain = modelVals[m].rain!=null ? modelVals[m].rain : rain;
+        const [mic,mco] = wmoIcon(reconcileCode(v, mRain));
+        modelVals[m].icon = mic; modelVals[m].cond = mco;
+      });
     }
     // Ensemble schlägt Modell-Median beim Regenrisiko (Tagesmaximum der Stundenwerte)
     const ensDay=hIdxs.map(ix=>ensRain?ensRain[htimes[ix]]:null).filter(v=>v!=null);
@@ -799,7 +891,7 @@ function buildWeatherData(raw, rawM, ensRain){
       thunder: thunderDay,
       snow:0, sun:sunH,
       wind: Math.round(raw.daily.wind_speed_10m_max[i] || 0),
-      spread, mdetail, parts, modelVals
+      spread, mdetail, parts, modelVals, rainModelWeighted, rainSpread
     });
   });
 
