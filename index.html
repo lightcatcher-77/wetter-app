@@ -249,6 +249,15 @@ function ensembleUrl(lat,lon){
 
 // ── Anzeige-Helfer ───────────────────────────────────────────────────────────
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function roundRectPath(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
 // "Jetzt" in der Ortszeit des angezeigten Standorts (utcOffset aus der API);
 // ohne Offset (alte Cache-Daten) wird die Gerätezeit verwendet.
 function locParts(off){
@@ -454,6 +463,63 @@ function render(data){
       if(maxArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Max`,data:maxArr,borderColor:'rgba(245,200,66,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(245,200,66,.55)',tension:0.4,spanGaps:true});
       if(minArr.some(v=>v!=null)) modelDatasets.push({label:`${MODEL_LBL[m]} Min`,data:minArr,borderColor:'rgba(107,163,214,.32)',backgroundColor:'transparent',borderWidth:1,pointRadius:2,pointHoverRadius:4,pointBackgroundColor:'rgba(107,163,214,.55)',tension:0.4,spanGaps:true});
     });
+    // Ersetzt die Standard-Tooltip-Box (die sonst alle ~10 Datasets inkl. der
+    // unauffälligen Modell-Spaghetti-Linien aufgelistet hätte) durch zwei kompakte
+    // Beschriftungen direkt am Max-/Min-Punkt, vertikal sortiert wie die Kurve
+    // selbst verläuft und per dünner Linie mit ihrem Punkt verbunden.
+    const pointLabelPlugin={
+      id:'pointLabels',
+      afterDatasetsDraw(chart){
+        const active=chart.getActiveElements().filter(a=>{
+          const lbl=chart.data.datasets[a.datasetIndex].label;
+          return lbl==='Max °C'||lbl==='Min °C';
+        });
+        if(!active.length) return;
+        const {ctx,chartArea:area}=chart;
+        const hoverX=active[0].element.x;
+        ctx.save();
+        ctx.strokeStyle='rgba(255,255,255,.14)';
+        ctx.lineWidth=1;
+        ctx.setLineDash([3,3]);
+        ctx.beginPath();ctx.moveTo(hoverX,area.top);ctx.lineTo(hoverX,area.bottom);ctx.stroke();
+        ctx.setLineDash([]);
+
+        const items=active.map(a=>{
+          const ds=chart.data.datasets[a.datasetIndex];
+          return {px:a.element.x,py:a.element.y,val:ds.data[a.index],color:ds.label==='Max °C'?'#f5c842':'#6ba3d6'};
+        }).sort((p,q)=>p.py-q.py); // oben zuerst = wie die Kurve verläuft
+
+        const onRight=hoverX<area.right-76;
+        const gap=16;
+        let prevEdge=null;
+        items.forEach(it=>{
+          const lx=onRight?it.px+gap:it.px-gap;
+          let ly=it.py;
+          if(prevEdge!=null&&ly<prevEdge) ly=prevEdge;
+          prevEdge=ly+22;
+
+          ctx.beginPath();
+          ctx.strokeStyle=it.color;ctx.globalAlpha=.65;ctx.lineWidth=1;
+          ctx.moveTo(it.px,it.py);ctx.lineTo(lx,ly);ctx.stroke();
+          ctx.globalAlpha=1;
+
+          const text=`${Math.round(it.val)}°`;
+          ctx.font='600 12px Outfit, sans-serif';
+          const tw=ctx.measureText(text).width;
+          const boxW=tw+14,boxH=20;
+          const bx=onRight?lx:lx-boxW;
+          const by=ly-boxH/2;
+          ctx.fillStyle='rgba(10,20,32,.92)';
+          ctx.strokeStyle=it.color;ctx.lineWidth=1;
+          roundRectPath(ctx,bx,by,boxW,boxH,6);
+          ctx.fill();ctx.stroke();
+          ctx.fillStyle=it.color;
+          ctx.textBaseline='middle';ctx.textAlign='center';
+          ctx.fillText(text,bx+boxW/2,by+boxH/2+0.5);
+        });
+        ctx.restore();
+      }
+    };
     chartInst=new Chart(ctx,{
       type:'line',
       data:{
@@ -469,14 +535,13 @@ function render(data){
       options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
         plugins:{legend:{labels:{color:'#8ba0b8',font:{family:'Outfit',size:12},
           filter:item=>item.text==='Max °C'||item.text==='Min °C'}},
-          tooltip:{
-            itemSort:(a,b)=>{const w=l=>l==='Max °C'?0:l==='Min °C'?1:2;return w(a.dataset.label)-w(b.dataset.label);},
-            callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y}°C`}}},
+          tooltip:{enabled:false}},
         scales:{
           x:{ticks:{color:'#8ba0b8',font:{family:'Outfit',size:11}},grid:{color:'rgba(255,255,255,.05)'}},
           y:{ticks:{color:'#8ba0b8',font:{family:'Outfit'},stepSize:5,callback:v=>v+'°'},grid:{color:'rgba(255,255,255,.05)'}}
         }
-      }
+      },
+      plugins:[pointLabelPlugin]
     });
   },80);
 }
@@ -588,16 +653,14 @@ function toggleDay(i){
     ${r.mdetail?`<div class="dd-models">🌡 Höchstwert je Modell: ${r.mdetail}</div>`:''}`;
 }
 
-// Chart-Tooltip auf Touch-Geräten wieder ausblenden: bleibt sonst nach dem
-// Antippen dauerhaft stehen (kein mouseleave). Tipp außerhalb des Diagramms
-// oder 5 s Wartezeit blenden ihn aus.
-let ttTimer=null;
+// Chart-Beschriftung auf Touch-Geräten wieder ausblenden: bleibt sonst nach dem
+// Antippen dauerhaft stehen (kein mouseleave). Nur ein Tipp außerhalb des
+// Diagramms blendet sie aus — kein Auto-Verschwinden nach Zeit mehr.
 function hideChartTooltip(){
   if(!chartInst) return;
-  clearTimeout(ttTimer);
   if(chartInst.getActiveElements().length){
     chartInst.setActiveElements([]);
-    chartInst.tooltip.setActiveElements([],{x:0,y:0});
+    chartInst.tooltip?.setActiveElements([],{x:0,y:0});
     chartInst.update('none');
   }
 }
@@ -606,9 +669,6 @@ document.addEventListener('pointerdown',e=>{
   if(!c||!chartInst) return;
   if(e.target!==c){
     hideChartTooltip();
-  }else{
-    clearTimeout(ttTimer);
-    ttTimer=setTimeout(hideChartTooltip,5000);
   }
 },true);
 
