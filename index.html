@@ -234,7 +234,7 @@
 // ── Konfiguration ────────────────────────────────────────────────────────────
 const FALLBACK = { lat: 47.5676, lon: 10.7012, name: 'Füssen' };
 const MODELS = ['icon_seamless','ecmwf_ifs025','gfs_seamless','meteofrance_seamless'];
-const MODEL_LBL = { icon_seamless:'DWD ICON', ecmwf_ifs025:'ECMWF', gfs_seamless:'NOAA GFS', meteofrance_seamless:'Météo-France' };
+const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE/AROME' };
 const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
 // Dieselben Modellfarben als konkrete Hex-Werte — Canvas kann var(--x) nicht auflösen.
 const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
@@ -250,7 +250,7 @@ function mainUrl(lat,lon){
   return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,uv_index&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunshine_duration,wind_speed_10m_max,sunrise,sunset&timezone=auto&forecast_days=9`;
 }
 function modelsUrl(lat,lon){
-  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,weather_code&models=${MODELS.join(',')}&timezone=auto&forecast_days=9`;
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,weather_code&models=${MODELS.join(',')}&timezone=auto&forecast_days=9`;
 }
 function ensembleUrl(lat,lon){
   return `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lon}&hourly=precipitation&models=icon_seamless&timezone=auto&forecast_days=9`;
@@ -825,7 +825,6 @@ function reconcileCode(code,rainPct){
 // ensRain = Stunden-Regenwahrscheinlichkeit aus dem ICON-EPS-Ensemble (optional).
 function buildWeatherData(raw, rawM, ensRain){
   const cur = raw.current;
-  const [ico,cond] = wmoIcon(cur.weather_code);
   const sunrise = raw.daily.sunrise[0].slice(11,16);
   const sunset = raw.daily.sunset[0].slice(11,16);
 
@@ -837,23 +836,38 @@ function buildWeatherData(raw, rawM, ensRain){
   }
   const activeModels = rawM ? MODELS.filter(m=>rawM.daily?.['temperature_2m_max_'+m]?.some(v=>v!=null)) : [];
 
+  const nowIsoT = cur.time;
+  const htimes = raw.hourly.time;
+  let si = htimes.findIndex(t=>t>=nowIsoT);
+  if (si<0) si=0;
+
+  // "Jetzt"-Code: ICON statt best_match, da laut Gewichtungsschema (siehe W_NEAR) im
+  // Nahbereich wegen der ICON-D2-Auflösung am verlässlichsten — best_match kann bei
+  // durchbrochener Bewölkung von der real beobachteten Lage abweichen.
+  const iconMi = mHourIdx[htimes[si]];
+  const iconNowCode = (iconMi!=null && rawM.hourly.weather_code_icon_seamless)
+    ? rawM.hourly.weather_code_icon_seamless[iconMi] : null;
+  const nowCode = iconNowCode!=null ? iconNowCode : cur.weather_code;
+  const [icoRaw,cond] = wmoIcon(nowCode);
+  // Nachts nie ein Sonnen-Icon zeigen, auch bei klarem/leicht bewölktem Himmel — dann Mond statt Sonne.
+  const toMin=s=>{const[h,m]=s.split(':').map(Number);return h*60+m;};
+  const nowMin=toMin(cur.time.slice(11,16));
+  const isNightNow=nowMin<toMin(sunrise)||nowMin>=toMin(sunset);
+  const ico=(isNightNow&&['☀️','🌤','⛅'].includes(icoRaw))?'🌙':icoRaw;
+
   const current = {
     temp: Math.round(cur.temperature_2m),
     feelsLike: Math.round(cur.apparent_temperature),
-    icon: ico, condition: cond, weatherCode: cur.weather_code,
+    icon: ico, condition: cond, weatherCode: nowCode,
     wind: Math.round(cur.wind_speed_10m),
     windDir: windDirLbl(cur.wind_direction_10m),
     rain_pct: raw.daily.precipitation_probability_max[0] || 0,
-    thunder_pct: thunderPct(cur.weather_code),
+    thunder_pct: thunderPct(nowCode),
     humidity: Math.round(cur.relative_humidity_2m),
     uv: Math.round(cur.uv_index || 0),
     sunrise, sunset
   };
 
-  const nowIsoT = cur.time;
-  const htimes = raw.hourly.time;
-  let si = htimes.findIndex(t=>t>=nowIsoT);
-  if (si<0) si=0;
   const hourly24=[];
   for(let i=0;i<24;i++){
     const idx=si+i;
