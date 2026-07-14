@@ -1095,6 +1095,14 @@ function initRadar(){
   }).addTo(radarMap);
   radarMarker=L.circleMarker([FALLBACK.lat,FALLBACK.lon],{radius:6,color:'#f5c842',weight:2,fillColor:'#f5c842',fillOpacity:.9}).addTo(radarMap);
   radarLoc={lat:FALLBACK.lat,lon:FALLBACK.lon};
+  // Satellitenbild ist ein Einzelbild-Overlay (kein Kachelraster) — bei Verschieben/Zoomen
+  // muss es auf den neuen Kartenausschnitt neu zugeschnitten werden.
+  radarMap.on('moveend zoomend',()=>{
+    if(radarMode==='sat'&&radarLayer&&radarLayer._isSat&&radarLayer._iso){
+      radarLayer.setBounds(radarMap.getBounds());
+      radarLayer.setUrl(satOverlayUrl(radarLayer._iso));
+    }
+  });
   fetchRadarFrames();
 }
 function radarSetCenter(lat,lon){
@@ -1234,11 +1242,15 @@ function radarRenderFrame(i){
     }
   }else{
     const iso=new Date(frame.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
-    if(radarLayer&&radarLayer._isSat)radarLayer.setParams({time:iso});
-    else{
+    const url=satOverlayUrl(iso);
+    if(radarLayer&&radarLayer._isSat){
+      radarLayer.setUrl(url);
+      radarLayer._iso=iso;
+    }else{
       if(radarLayer)radarMap.removeLayer(radarLayer);
-      radarLayer=L.tileLayer.wms(EUMETSAT_WMS,{layers:'msg_fes:ir108',format:'image/png',transparent:true,version:'1.3.0',opacity:.85,time:iso}).addTo(radarMap);
+      radarLayer=L.imageOverlay(url,radarMap.getBounds(),{opacity:.85}).addTo(radarMap);
       radarLayer._isSat=true;
+      radarLayer._iso=iso;
     }
   }
   const offsetMin=(i-(pastLen-1))*radarFrameStepMin();
@@ -1280,29 +1292,51 @@ function radarSwitchMode(mode){
   document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':'☁️ Wolkenradar';
   if(mode==='rain')fetchRadarFrames();else fetchSatFrames();
 }
-// Meteosat liefert keine Frame-Liste wie RainViewer — Zeitpunkte selbst im 15-Min-Takt
-// erzeugen (Meteosat-Zyklus), das GeoServer-Backend rundet dank nearestValue selbst passend.
+// Exakt dieselbe Zeitachse wie das Regenradar (gleiche Zeitpunkte, gleiche Taktung) —
+// nur der Vergangenheits-Teil, Satellit liefert keine Prognose. So verhalten sich Ticks,
+// "Jetzt"/"X Min. zurück"-Beschriftung und Slider identisch zum Regenradar-Tab.
+// Fallback (10-Min-Takt über 2 Std.) nur falls der Regenradar-Abruf fehlgeschlagen ist.
 function fetchSatFrames(){
   if(!radarMap)return;
-  const stepMs=15*60000, nFrames=8;
-  const rounded=Math.floor(Date.now()/stepMs)*stepMs;
-  satFrames=[];
-  for(let i=nFrames-1;i>=0;i--)satFrames.push({time:Math.floor((rounded-i*stepMs)/1000)});
+  if(radarFrames.length&&radarPastLen){
+    satFrames=radarFrames.slice(0,radarPastLen).map(f=>({time:f.time}));
+  }else{
+    const stepMs=10*60000, nFrames=13;
+    const rounded=Math.floor(Date.now()/stepMs)*stepMs;
+    satFrames=[];
+    for(let i=nFrames-1;i>=0;i--)satFrames.push({time:Math.floor((rounded-i*stepMs)/1000)});
+  }
   radarIndex=satFrames.length-1;
   const slider=document.getElementById('radar-slider');
   slider.max=satFrames.length-1;
   slider.value=radarIndex;
   radarBuildTicks();
   radarRenderFrame(radarIndex);
-  document.getElementById('radar-note').textContent='Meteosat IR10.8 μm, alle 15 Min. (EUMETSAT, frei zugänglich). Graustufen: heller = kälterer/höherer Wolkenschirm — funktioniert auch nachts. Keine Prognose, nur Beobachtung.';
+  document.getElementById('radar-note').textContent='Meteosat IR10.8 μm (EUMETSAT, frei zugänglich). Graustufen: heller = kälterer/höherer Wolkenschirm — funktioniert auch nachts. Keine Prognose, nur Beobachtung.';
+  // Alle Frames im Hintergrund vorladen: ein Einzelbild pro Frame statt einer Kachelmatrix
+  // macht das günstig genug, damit Scrubben danach ohne Wartezeit aus dem Browser-Cache läuft.
+  satFrames.forEach(fr=>{
+    const iso=new Date(fr.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
+    new Image().src=satOverlayUrl(iso);
+  });
 }
 // ── Satelliten-Abgleich für "Jetzt" (dieselbe EUMETSAT-Quelle wie oben) ──────
 const EUMETSAT_WMS='https://view.eumetsat.int/geoserver/wms';
+// Einzelbild-Overlay statt Kachelraster: EUMETSATs WMS rendert on-the-fly (kein CDN wie
+// RainViewer) — ein großes Bild pro Frame ist spürbar schneller als 8 Kacheln pro Frame.
+function satOverlayUrl(iso){
+  const b=radarMap.getBounds(), size=radarMap.getSize();
+  const bbox=`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  return `${EUMETSAT_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes:ir108&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${bbox}&width=${Math.round(size.x)}&height=${Math.round(size.y)}&time=${encodeURIComponent(iso)}`;
+}
 // Konservativer Grauwert-Schwellwert (der Kanal ist ein reiner Grauverlauf, R=G=B): darunter
 // dominiert die warme Erdoberfläche das Pixel, es liegt also kein kalter/hoher Wolkenschirm
-// über dem Standort. Empirisch an Wüsten- (~0) und Nordatlantik-Tiefausläufern (~150)
-// orientiert — bewusst niedrig angesetzt, damit dünner Cirrus nicht als "klar" durchgeht.
-const SAT_CLEAR_LUM_MAX=100;
+// über dem Standort. Ursprünglich an Wüsten- (~0) und Nordatlantik-Tiefausläufern (~150)
+// orientiert; 100 erwies sich aber als zu hoch — bei realer dünner/schwacher Bewölkung
+// (Sonne kommt nur schwach durch) wurde ~38 gemessen und fälschlich als "klar" gewertet.
+// Deutlich niedriger angesetzt, auch auf Kosten dafür, dass echtes Klarwetter an kühleren
+// Tagen (niedrigere Bodentemperatur → niedrigerer Grauwert) seltener erkannt wird.
+const SAT_CLEAR_LUM_MAX=20;
 function sampleSatelliteClear(lat,lon){
   return new Promise(resolve=>{
     const d=0.15;
