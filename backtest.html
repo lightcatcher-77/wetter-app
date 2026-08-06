@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="apple-touch-icon.png">
+<title>Backtest · Wetter Live</title>
+<style>
+  @font-face{font-family:'Outfit';font-style:normal;font-weight:300 700;font-display:swap;src:url('fonts/outfit.woff2') format('woff2');}
+  :root {
+    --sky-top:#0a1520;--sky-mid:#16294a;--sky-bottom:#2e5d8e;
+    --text:#e8edf4;--text-dim:#8ba0b8;--accent:#f5c842;
+    --green:#56d68c;--orange:#f2994a;--red:#eb5757;--blue:#6ba3d6;
+    --card:rgba(255,255,255,0.07);--border:rgba(255,255,255,0.12);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Outfit',sans-serif;background:linear-gradient(170deg,var(--sky-top) 0%,var(--sky-mid) 40%,var(--sky-bottom) 100%);color:var(--text);min-height:100vh;}
+  .container{max-width:1000px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top)) 16px 60px;}
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  .back{display:inline-block;margin-bottom:18px;font-size:14px;color:var(--text-dim);}
+  h1{font-size:clamp(24px,5vw,34px);font-weight:400;margin-bottom:4px;}
+  .sub{font-size:13px;color:var(--text-dim);margin-bottom:22px;}
+  .stats{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px;}
+  .stat{flex:1;min-width:140px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;}
+  .stat .n{font-size:22px;font-weight:700;color:var(--accent);}
+  .stat .l{font-size:12px;color:var(--text-dim);margin-top:2px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:20px;backdrop-filter:blur(12px);}
+  .card h2{font-size:16px;font-weight:600;margin-bottom:12px;}
+  .card h2 .cnt{font-weight:400;color:var(--text-dim);font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;color:var(--text-dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:6px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(10,21,32,.85);}
+  td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.05);white-space:nowrap;}
+  tr:hover td{background:rgba(255,255,255,.03);}
+  .tablewrap{max-height:480px;overflow:auto;border-radius:10px;}
+  .model-badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;}
+  .lead{color:var(--text-dim);font-variant-numeric:tabular-nums;}
+  .btn{background:var(--card);border:1px solid var(--border);color:var(--text);font-family:inherit;font-size:13px;padding:8px 14px;border-radius:10px;cursor:pointer;}
+  .btn:hover{border-color:rgba(245,200,66,.45);}
+  .empty{color:var(--text-dim);font-size:13px;padding:20px;text-align:center;}
+  .loading{color:var(--text-dim);font-size:13px;padding:20px;text-align:center;}
+  .err{color:var(--red);font-size:13px;padding:20px;}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="index.html">← Zurück zur Wetter-App</a>
+  <h1>📊 Backtest-Log</h1>
+  <div class="sub">Was die 5 Modelle vorhergesagt haben, im Vergleich zu echten DWD-Messwerten für Füssen — geloggt stündlich per GitHub Actions.</div>
+
+  <div class="stats" id="stats">
+    <div class="stat"><div class="n">…</div><div class="l">wird geladen</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <h2>Vorhersagen <span class="cnt" id="pred-count"></span></h2>
+      <button class="btn" id="pred-toggle">Alle anzeigen</button>
+    </div>
+    <div class="tablewrap"><div id="pred-table" class="loading">Lädt …</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <h2>Beobachtungen (echte Messwerte) <span class="cnt" id="obs-count"></span></h2>
+    </div>
+    <div class="tablewrap"><div id="obs-table" class="loading">Lädt …</div></div>
+  </div>
+</div>
+
+<script>
+const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE' };
+const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
+const RECENT_RUNS = 5; // Anzahl der jüngsten stündlichen Läufe, die standardmäßig gezeigt werden
+const RECENT_OBS = 100;
+
+function hexToRgba(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+async function loadJsonl(path){
+  const res = await fetch(path, {cache:'no-store'});
+  if(!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+  const text = await res.text();
+  return text.split('\n').filter(l=>l.trim()).map(l=>JSON.parse(l));
+}
+
+function fmtTime(iso){
+  if(!iso) return '–';
+  const d = new Date(iso);
+  if(isNaN(d)) return iso;
+  return d.toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+
+function renderPredictions(rows, showAll){
+  const el = document.getElementById('pred-table');
+  if(!rows.length){ el.innerHTML = '<div class="empty">Noch keine Vorhersagen geloggt.</div>'; return; }
+  const issuedTimes = [...new Set(rows.map(r=>r.issued_at))].sort().reverse();
+  const keep = showAll ? issuedTimes : issuedTimes.slice(0, RECENT_RUNS);
+  const keepSet = new Set(keep);
+  const filtered = rows.filter(r=>keepSet.has(r.issued_at))
+    .sort((a,b)=> b.issued_at.localeCompare(a.issued_at) || a.lead_h-b.lead_h || a.model.localeCompare(b.model));
+  el.innerHTML = `<table><thead><tr>
+    <th>Geloggt um</th><th>Ziel-Zeitpunkt</th><th>Vorlauf</th><th>Modell</th><th>Temp.</th><th>Regen-%</th>
+  </tr></thead><tbody>${filtered.map(r=>`
+    <tr>
+      <td>${fmtTime(r.issued_at)}</td>
+      <td>${fmtTime(r.target_time)}</td>
+      <td class="lead">+${r.lead_h}h</td>
+      <td><span class="model-badge" style="background:${hexToRgba(MODEL_HEX[r.model]||'#8ba0b8',.18)};color:${MODEL_HEX[r.model]||'#e8edf4'}">${MODEL_LBL[r.model]||r.model}</span></td>
+      <td>${r.temp!=null?r.temp.toFixed(1)+'°C':'–'}</td>
+      <td>${r.precip_prob!=null?r.precip_prob+'%':'–'}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function renderObservations(rows){
+  const el = document.getElementById('obs-table');
+  if(!rows.length){ el.innerHTML = '<div class="empty">Noch keine Beobachtungen geloggt.</div>'; return; }
+  const sorted = [...rows].sort((a,b)=> b.time.localeCompare(a.time)).slice(0, RECENT_OBS);
+  el.innerHTML = `<table><thead><tr>
+    <th>Zeitpunkt</th><th>Temp.</th><th>Regen (60min)</th><th>Station</th><th>Entfernung</th>
+  </tr></thead><tbody>${sorted.map(r=>`
+    <tr>
+      <td>${fmtTime(r.time)}</td>
+      <td>${r.temp!=null?r.temp.toFixed(1)+'°C':'–'}</td>
+      <td>${r.precip_mm!=null?r.precip_mm+' mm':'–'}</td>
+      <td>${r.station||'–'}</td>
+      <td>${r.dist_m!=null?(r.dist_m/1000).toFixed(1)+' km':'–'}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function renderStats(predRows, obsRows){
+  const lastPred = predRows.length ? predRows.map(r=>r.issued_at).sort().at(-1) : null;
+  const lastObs = obsRows.length ? obsRows.map(r=>r.time).sort().at(-1) : null;
+  const stats = [
+    [predRows.length, 'Vorhersage-Zeilen'],
+    [obsRows.length, 'Beobachtungs-Zeilen'],
+    [lastPred ? fmtTime(lastPred) : '–', 'Letzter Vorhersage-Log'],
+    [lastObs ? fmtTime(lastObs) : '–', 'Letzte Messung'],
+  ];
+  document.getElementById('stats').innerHTML = stats.map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+}
+
+let allPredRows = [];
+let showAllPred = false;
+
+async function main(){
+  try{
+    const [predRows, obsRows] = await Promise.all([
+      loadJsonl('backtest-data/predictions.jsonl'),
+      loadJsonl('backtest-data/observations.jsonl'),
+    ]);
+    allPredRows = predRows;
+    renderStats(predRows, obsRows);
+    renderPredictions(predRows, showAllPred);
+    renderObservations(obsRows);
+    document.getElementById('pred-count').textContent = `(${predRows.length} gesamt)`;
+    document.getElementById('obs-count').textContent = `(${obsRows.length} gesamt, letzte ${Math.min(obsRows.length,RECENT_OBS)} gezeigt)`;
+  }catch(e){
+    document.getElementById('pred-table').innerHTML = `<div class="err">Fehler beim Laden: ${e.message}</div>`;
+    document.getElementById('obs-table').innerHTML = '';
+    document.getElementById('stats').innerHTML = '';
+  }
+}
+
+document.getElementById('pred-toggle').addEventListener('click', ()=>{
+  showAllPred = !showAllPred;
+  document.getElementById('pred-toggle').textContent = showAllPred ? `Nur letzte ${RECENT_RUNS} Läufe` : 'Alle anzeigen';
+  renderPredictions(allPredRows, showAllPred);
+});
+
+main();
+</script>
+</body>
+</html>
