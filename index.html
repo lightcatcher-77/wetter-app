@@ -1270,8 +1270,51 @@ let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Ka
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
 let satFrames=[]; // {time} — synthetisiert, RainViewer liefert hierfür keine Frame-Liste
 let radarLoc=null, radarSampleSeq=0;
-function activeFrames(){return radarMode==='rain'?radarFrames:satFrames;}
-function activePastLen(){return radarMode==='rain'?radarPastLen:satFrames.length;}
+// DWD-WMS-Zeitkacheln für die sichtbare Regenradar-Karte bei deutschen Standorten (echte
+// ~2h-Prognose statt RainViewers oft leerem Nowcast) — RainViewer bleibt für Badge/Vorwarnungs-
+// Fallback/Wolkenradar weiterhin im Hintergrund aktiv, siehe fetchRadarFrames().
+const DWD_WMS='https://maps.dwd.de/geoserver/dwd/wms';
+const DWD_LAYER='dwd:Radar_rv_product_1x1km_ger';
+const DWD_STEP_MIN=5;
+const DWD_PAST_MIN=120, DWD_FUTURE_MIN=120;
+let dwdFrames=[], dwdPastLen=0;
+function radarUsingDwdForLoc(){ return !!radarLoc && inGermany(radarLoc.lat,radarLoc.lon); }
+function activeFrames(){
+  if(radarMode==='sat')return satFrames;
+  return radarUsingDwdForLoc()?dwdFrames:radarFrames;
+}
+function activePastLen(){
+  if(radarMode==='sat')return satFrames.length;
+  return radarUsingDwdForLoc()?dwdPastLen:radarPastLen;
+}
+function buildDwdFrames(){
+  const now=new Date();
+  now.setUTCSeconds(0,0);
+  now.setUTCMinutes(Math.floor(now.getUTCMinutes()/DWD_STEP_MIN)*DWD_STEP_MIN);
+  const steps=[];
+  for(let m=-DWD_PAST_MIN;m<=DWD_FUTURE_MIN;m+=DWD_STEP_MIN)steps.push(m);
+  dwdFrames=steps.map(m=>{
+    const t=new Date(now.getTime()+m*60000);
+    return{time:Math.floor(t.getTime()/1000),iso:t.toISOString()};
+  });
+  dwdPastLen=steps.filter(m=>m<=0).length;
+}
+// Baut die sichtbare Kartenanzeige für den Regen-Tab neu auf: DWD für deutsche Standorte
+// (sofort, kein Netzwerk-Roundtrip nötig — nur die Zeitachse wird neu berechnet), sonst
+// unverändert RainViewer via fetchRadarFrames(). Wird bei Standort- und Tab-Wechsel gerufen.
+function refreshRainDisplay(){
+  if(radarMode!=='rain'||!radarMap||!radarLoc)return;
+  if(radarUsingDwdForLoc()){
+    buildDwdFrames();
+    radarIndex=dwdPastLen-1;
+    const slider=document.getElementById('radar-slider');
+    slider.max=dwdFrames.length-1;
+    slider.value=radarIndex;
+    radarBuildTicks();
+    radarRenderFrame(radarIndex);
+    document.getElementById('radar-note').textContent='Deutsches Radarkomposit (DWD, 1 km, 5-Min-Raster) inkl. echter 2-Std.-Kurzfristprognose (RADVOR).';
+  }
+}
 
 function initRadar(){
   if(typeof L==='undefined'||radarMap)return;
@@ -1296,12 +1339,14 @@ function initRadar(){
     }
   });
   fetchRadarFrames();
+  refreshRainDisplay();
 }
 function radarSetCenter(lat,lon){
   if(!radarMap)return;
   radarMap.setView([lat,lon],radarMap.getZoom()||7);
   if(radarMarker)radarMarker.setLatLng([lat,lon]);
   radarLoc={lat,lon};
+  refreshRainDisplay();
   radarSampleAtLocation();
 }
 function radarTileCoords(lat,lon,z){
@@ -1361,15 +1406,49 @@ function radarClassifyFrameAtLoc(frameIdx,loc){
     img.src=url;
   });
 }
+// Eng um den Punkt geschnittene Bbox fürs GetFeatureInfo unten — bewusst viel kleiner als
+// dwdBbox() (die deckt ~8-10km für die Umkreis-Vorwarnung ab). Bei 3x3 Pixeln über ~1.5-2km
+// Kantenlänge liegt die Mitte (x=1,y=1) nah am nativen 1km-Raster des DWD-Produkts; mit der
+// breiten dwdBbox gemittelt worden wäre die Auflösung auf mehrere km verwässert.
+function dwdPointBbox(loc){
+  const d=0.01;
+  return `${loc.lon-d},${loc.lat-d},${loc.lon+d},${loc.lat+d}`;
+}
+// Fragt den exakten Niederschlagswert (mm/h) am Standort per WMS GetFeatureInfo ab (DWD-Layer
+// ist queryable) — genauer als eine Farb-Heuristik auf dem Kartenbild, da direkt der Messwert
+// statt einer aus der Legendenfarbe geschätzten Intensität zurückkommt. Schwellwerte orientieren
+// sich an der gängigen meteorologischen Einteilung leicht/mäßig/stark (<2,5 / 2,5-10 / >10 mm/h).
+function dwdClassifyPointAtTime(loc,isoTime){
+  return fetch('https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.1.1&request=GetFeatureInfo'+
+    '&layers='+DWD_LAYER+'&query_layers='+DWD_LAYER+'&styles=&bbox='+dwdPointBbox(loc)+
+    '&width=3&height=3&srs=EPSG:4326&x=1&y=1&info_format=application/json&feature_count=1&time='+isoTime)
+    .then(r=>r.ok?r.json():null)
+    .then(j=>{
+      const v=j&&j.features&&j.features[0]&&j.features[0].properties&&j.features[0].properties.RV_ANALYSIS;
+      if(v==null||v<=0)return null;
+      if(v>10)return{level:'stark',label:'kräftiger Regen'};
+      if(v>=2.5)return{level:'mittel',label:'mäßiger Regen'};
+      return{level:'leicht',label:'leichter Regen'};
+    }).catch(()=>null);
+}
 function radarSampleAtLocation(){
-  // Sampelt bewusst immer den "Jetzt"-Referenzframe (letzter Vergangenheits-Frame),
-  // unabhängig davon, welchen Zeitpunkt der Slider gerade anzeigt — das Badge im
-  // aktuellen Wetterstatus soll nicht durch Zurückspulen auf der Zeitleiste verfälscht werden.
-  if(!radarLoc||!radarFrames.length||!radarHost){radarSetFlag(null);return;}
+  // Sampelt bewusst immer den "Jetzt"-Zeitpunkt, unabhängig davon, welchen Zeitpunkt der
+  // Slider gerade anzeigt — das Badge im aktuellen Wetterstatus soll nicht durch Zurückspulen
+  // auf der Zeitleiste verfälscht werden. Für deutsche Standorte DWD (präziser, siehe
+  // dwdClassifyPointAtTime), sonst weiterhin RainViewer-Pixel-Sampling als Fallback.
+  if(!radarLoc){radarSetFlag(null);return;}
   const loc=radarLoc, seq=++radarSampleSeq;
-  radarClassifyFrameAtLoc(radarPastLen-1,loc).then(info=>{
-    if(seq===radarSampleSeq)radarSetFlag(info);
-  });
+  if(radarUsingDwdForLoc()){
+    dwdClassifyPointAtTime(loc,dwdTimeSteps()[0]).then(info=>{
+      if(seq===radarSampleSeq)radarSetFlag(info);
+    });
+  }else if(radarFrames.length&&radarHost){
+    radarClassifyFrameAtLoc(radarPastLen-1,loc).then(info=>{
+      if(seq===radarSampleSeq)radarSetFlag(info);
+    });
+  }else{
+    radarSetFlag(null);
+  }
   radarCheckIncoming();
 }
 // DWD-eigener WMS-Radar (RV-Produkt: Analyse + echte ~2h-Vorhersage, 1km, 5-Min-Raster,
@@ -1465,24 +1544,31 @@ async function fetchRadarFrames(){
     radarFrames=[...(j.radar?.past||[]),...(j.radar?.nowcast||[])];
     radarPastLen=(j.radar?.past||[]).length;
     if(!radarFrames.length)throw new Error('Keine Radardaten verfügbar');
-    radarIndex=radarPastLen-1;
-    const slider=document.getElementById('radar-slider');
-    slider.max=radarFrames.length-1;
-    slider.value=radarIndex;
-    radarBuildTicks();
-    radarRenderFrame(radarIndex);
     radarSampleAtLocation();
-    const futureSteps=radarFrames.length-radarPastLen;
-    const futureMin=futureSteps*radarFrameStepMin();
-    document.getElementById('radar-note').textContent=futureSteps>0
-      ? `Vergangene ~2 Std. + ${futureMin} Min. Kurzfrist-Prognose (RainViewer) — Prognose ist kein garantierter Teil der kostenlosen API, Verlässlichkeit nimmt Richtung Prognose-Ende ab.`
-      : 'Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.';
     // Satelliten-"Jetzt"-Bild schon jetzt im Hintergrund vorladen (unabhängig vom aktiven
     // Tab), damit es beim Wechsel auf "Wolken" meist schon aus dem Cache kommt.
     prefetchSatNow();
+    // Sichtbare Kartenanzeige nur mit RainViewer bestücken, wenn der aktuelle Standort nicht
+    // in Deutschland liegt — sonst würde dieser asynchrone Fetch die bereits (synchron in
+    // radarSetCenter) gerenderte DWD-Karte überschreiben (Race Condition).
+    if(!radarUsingDwdForLoc()){
+      radarIndex=radarPastLen-1;
+      const slider=document.getElementById('radar-slider');
+      slider.max=radarFrames.length-1;
+      slider.value=radarIndex;
+      radarBuildTicks();
+      radarRenderFrame(radarIndex);
+      const futureSteps=radarFrames.length-radarPastLen;
+      const futureMin=futureSteps*radarFrameStepMin();
+      document.getElementById('radar-note').textContent=futureSteps>0
+        ? `Vergangene ~2 Std. + ${futureMin} Min. Kurzfrist-Prognose (RainViewer) — Prognose ist kein garantierter Teil der kostenlosen API, Verlässlichkeit nimmt Richtung Prognose-Ende ab.`
+        : 'Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.';
+    }
   }catch(e){
-    document.getElementById('radar-time').textContent='Radar nicht verfügbar';
-    document.getElementById('radar-note').textContent='Radardaten konnten nicht geladen werden.';
+    if(!radarUsingDwdForLoc()){
+      document.getElementById('radar-time').textContent='Radar nicht verfügbar';
+      document.getElementById('radar-note').textContent='Radardaten konnten nicht geladen werden.';
+    }
   }
 }
 function radarFrameStepMin(){
@@ -1500,7 +1586,10 @@ function radarBuildTicks(){
     const pct=(i/(n-1))*100;
     const isNow=i===pastLen-1;
     const d=new Date(fr.time*1000);
-    const isHour=d.getMinutes()<10;
+    // Exakt volle Stunde, nicht nur "<10" — bei RainViewers altem 10-Min-Raster traf "<10" nur
+    // auf :00 zu, beim DWD-5-Min-Raster aber fälschlich auch auf :05, was zu zwei überlappenden
+    // Stunden-Beschriftungen pro Stunde führte.
+    const isHour=d.getMinutes()===0;
     if(isNow){
       html+=`<div class="radar-tick now" style="left:${pct}%"></div><div class="radar-tick-label now" style="left:${pct}%">Jetzt</div>`;
     }else if(isHour){
@@ -1516,9 +1605,20 @@ function radarRenderFrame(i){
   const f=activeFrames(), pastLen=activePastLen();
   const frame=f[i];
   if(!frame||!radarMap)return;
-  if(radarMode==='rain'){
+  if(radarMode==='rain'&&radarUsingDwdForLoc()){
+    if(radarLayer&&radarLayer._isDwd){
+      radarLayer.setParams({time:frame.iso});
+    }else{
+      if(radarLayer)radarMap.removeLayer(radarLayer);
+      radarLayer=L.tileLayer.wms(DWD_WMS,{
+        layers:DWD_LAYER,format:'image/png',transparent:true,version:'1.3.0',
+        opacity:.75,zIndex:400,time:frame.iso
+      }).addTo(radarMap);
+      radarLayer._isDwd=true;
+    }
+  }else if(radarMode==='rain'){
     const url=`${radarHost}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
-    if(radarLayer&&!radarLayer._isSat)radarLayer.setUrl(url);
+    if(radarLayer&&!radarLayer._isSat&&!radarLayer._isDwd)radarLayer.setUrl(url);
     else{
       if(radarLayer)radarMap.removeLayer(radarLayer);
       radarLayer=L.tileLayer(url,{opacity:.75,maxNativeZoom:12,zIndex:400}).addTo(radarMap);
@@ -1574,7 +1674,7 @@ function radarSwitchMode(mode){
   document.getElementById('radar-tab-sat').classList.toggle('active',mode==='sat');
   document.getElementById('radar-tab-sat').setAttribute('aria-selected',mode==='sat');
   document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':'☁️ Wolkenradar';
-  if(mode==='rain')fetchRadarFrames();else fetchSatFrames();
+  if(mode==='rain'){radarUsingDwdForLoc()?refreshRainDisplay():fetchRadarFrames();}else fetchSatFrames();
 }
 // Exakt dieselbe Zeitachse wie das Regenradar (gleiche Zeitpunkte, gleiche Taktung) —
 // nur der Vergangenheits-Teil, Satellit liefert keine Prognose. So verhalten sich Ticks,
