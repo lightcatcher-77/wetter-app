@@ -112,6 +112,8 @@
     .hourly-scroll{overflow-x:auto;padding:0 16px 16px;}
     .hourly-inner{display:flex;gap:8px;width:max-content;}
     .h-cell{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:10px 8px;text-align:center;width:68px;flex-shrink:0;}
+    .h-cell.h-tappable{cursor:pointer;-webkit-tap-highlight-color:rgba(107,163,214,.25);}
+    .h-cell.h-tappable:active{background:rgba(107,163,214,.1);}
     .h-cell.h-now{border-color:rgba(245,200,66,.5);background:rgba(245,200,66,.08);}
     .h-cell.h-night{background:rgba(10,21,32,0.5);}
     .h-cell.h-storm{border-color:rgba(245,200,66,.45);background:rgba(245,200,66,.06);}
@@ -121,7 +123,7 @@
     .h-rain{font-size:10px;color:var(--blue);margin-top:3px;}
     .h-thunder{font-size:10px;color:var(--accent);font-weight:700;margin-top:2px;}
     .h-wind{font-size:10px;color:var(--text-dim);margin-top:2px;}
-    .h-dots{display:flex;gap:2px;justify-content:center;margin-top:5px;cursor:pointer;}
+    .h-dots{display:flex;gap:2px;justify-content:center;margin-top:5px;}
     .h-dot{width:5px;height:5px;border-radius:50%;flex:none;}
     .h-detail{font-size:8px;color:var(--text-dim);margin-top:3px;line-height:1.3;}
     .h-detail-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin:0 3px 0 3px;vertical-align:middle;}
@@ -346,9 +348,10 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
     const isNow=i===0,isNight=isNightH(cell.h),isStorm=cell.thunder>40;
     const icon=(isNight&&SUN.includes(cell.icon))?'🌙':cell.icon;
     const rainTxt=cell.rain>0?`💧${cell.rain}%`:`<span style="opacity:.3">💧–</span>`;
-    const cls=['h-cell',isNow?'h-now':'',isNight?'h-night':'',isStorm?'h-storm':''].filter(Boolean).join(' ');
+    const hasModels=activeModels.length>=2;
+    const cls=['h-cell',isNow?'h-now':'',isNight?'h-night':'',isStorm?'h-storm':'',hasModels?'h-tappable':''].filter(Boolean).join(' ');
     let modelHtml='';
-    if(activeModels.length>=2){
+    if(hasModels){
       // Punktreihe: einheitlicher Blau-Verlauf (rainScaleColor) statt Modellfarbe — die Punkte
       // zeigen ausschließlich die Regenwahrscheinlichkeits-Intensität je Modellposition. Welche
       // Position welches Modell ist, steht in der Legende unten (feste Reihenfolge wie MODELS).
@@ -362,9 +365,11 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
         const v=cell.modelVals&&cell.modelVals[m];
         return`<span style="color:${MODEL_HEX[m]}">${MODEL_SHORT[m]}</span> <span class="h-detail-dot" style="background:${rainScaleColor(v)}"></span>${v??'–'}%`;
       }).join(' · ');
-      modelHtml=`<div class="h-dots" onclick="toggleHourDetail(this)">${dots}</div><div class="h-detail" hidden>${detail}</div>`;
+      modelHtml=`<div class="h-dots">${dots}</div><div class="h-detail" hidden>${detail}</div>`;
     }
-    return`<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}${modelHtml}</div>`;
+    // Tap-Handler sitzt auf der ganzen Karte, nicht nur der 5px-Punktreihe — die war auf dem
+    // Handy als Tap-Ziel viel zu klein (unzuverlässig treffbar).
+    return`<div class="${cls}"${hasModels?' onclick="toggleHourDetail(this)"':''}><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}${modelHtml}</div>`;
   });
   const legend=activeModels.length>=2?`<div class="hourly-legend">Punkte = Regenwahrscheinlichkeit, dunkler = mehr Regen · feste Reihenfolge ${activeModels.map(m=>MODEL_SHORT[m]).join(' · ')} · antippen für genaue Werte</div>`:'';
   return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div>${legend}</div>`;
@@ -420,9 +425,10 @@ function toggleSection(headEl,bodyId){
     setTimeout(()=>chartInst.resize(),360);
   }
 }
-// Ein-/Ausblenden der Modell-Detailzeile unter der Punktreihe einer Stundenkarte.
-function toggleHourDetail(dotsEl){
-  const detail=dotsEl.nextElementSibling;
+// Ein-/Ausblenden der Modell-Detailzeile — Tap-Handler sitzt auf der ganzen Stundenkarte (cellEl),
+// nicht nur der Punktreihe, daher hier gezielt die .h-detail-Kindzeile suchen statt nextSibling.
+function toggleHourDetail(cellEl){
+  const detail=cellEl.querySelector('.h-detail');
   if(detail) detail.hidden=!detail.hidden;
 }
 
