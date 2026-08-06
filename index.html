@@ -286,6 +286,13 @@ function modelsUrl(lat,lon){
 function ensembleUrl(lat,lon){
   return `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lon}&hourly=precipitation&models=icon_seamless&timezone=auto&forecast_days=9`;
 }
+function brightSkyUrl(lat,lon){
+  return `https://api.brightsky.dev/current_weather?lat=${lat}&lon=${lon}`;
+}
+function isGermany(lat,lon){
+  // Grobe Bounding-Box (kein exaktes Grenzpolygon) — reicht als Weiche für die Bright-Sky-Priorisierung
+  return lat>=47.2 && lat<=55.1 && lon>=5.8 && lon<=15.1;
+}
 
 // ── Anzeige-Helfer ───────────────────────────────────────────────────────────
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -464,6 +471,7 @@ function render(data){
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
         <div class="condition">${cur.condition}</div>
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
+        <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
       </div>
       <div class="hero-stats">
@@ -802,6 +810,19 @@ function wmoIcon(code){
   if (c<=89) return ["🌨","Schneeschauer"];
   return ["⛈","Gewitter"];
 }
+// Bright-Sky-Beobachtung (grobes 'condition'-Feld) auf das bestehende WMO-Icon-Schema abbilden,
+// damit Icon/Text/Gewitter-% weiterhin über wmoIcon()/thunderPct() laufen.
+function brightSkyToWmoCode(w){
+  switch(w.condition){
+    case 'thunderstorm': return 95;
+    case 'hail': return 96;
+    case 'snow': return 73;
+    case 'sleet': return 67; // WMO kennt kein reines "Schneeregen", nächstliegend als Regen behandelt
+    case 'rain': { const mm=w.precipitation_60??0; return mm>=5?65:mm>=1?63:61; }
+    case 'fog': return 45;
+    default: { const cc=w.cloud_cover??0; return cc<=20?0:cc<=50?1:cc<=80?2:3; } // 'dry'/unbekannt
+  }
+}
 // Tagescharakter aus Stunden-Codes: Gewitter schlägt alles, Niederschlag ab 2 Stunden,
 // Nebel nur wenn er mehr als die Hälfte des Fensters dominiert (sonst zählt er als bedeckt) —
 // verhindert, dass Morgennebel einen sonnigen Tag als 🌫 anzeigt (daily.weather_code-Eigenheit).
@@ -893,7 +914,7 @@ function reconcileCode(code,rainPct){
 // Wandelt die Open-Meteo-Antworten in das Anzeigeformat um.
 // raw = best_match-Abruf (alle Variablen), rawM = Multi-Modell-Abruf (optional),
 // ensRain = Stunden-Regenwahrscheinlichkeit aus dem ICON-EPS-Ensemble (optional).
-function buildWeatherData(raw, rawM, ensRain, satClear){
+function buildWeatherData(raw, rawM, ensRain, satClear, bs){
   const cur = raw.current;
   const sunrise = raw.daily.sunrise[0].slice(11,16);
   const sunset = raw.daily.sunset[0].slice(11,16);
@@ -922,6 +943,14 @@ function buildWeatherData(raw, rawM, ensRain, satClear){
   // aber das IR-Satellitenbild zeigt keinen kalten Wolkenschirm über dem Standort → als klar
   // werten. Nur in dieser Richtung und nie bei Regen-/Gewittercodes — die bleiben ICON-basiert.
   if (satClear && (nowCode===2 || nowCode===3)) nowCode = 0;
+  // Innerhalb Deutschlands: echte Beobachtung der nächsten DWD-Station (Bright Sky) statt
+  // Modell-Schätzung für "Jetzt" — ersetzt den Satelliten-Override, da bereits real gemessen.
+  let station = {source:'openmeteo'};
+  if (bs && bs.weather && bs.weather.temperature!=null) {
+    nowCode = brightSkyToWmoCode(bs.weather);
+    const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
+    if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
+  }
   const [icoRaw,cond] = wmoIcon(nowCode);
   // Nachts nie ein Sonnen-Icon zeigen, auch bei klarem/leicht bewölktem Himmel — dann Mond statt Sonne.
   const toMin=s=>{const[h,m]=s.split(':').map(Number);return h*60+m;};
@@ -929,17 +958,18 @@ function buildWeatherData(raw, rawM, ensRain, satClear){
   const isNightNow=nowMin<toMin(sunrise)||nowMin>=toMin(sunset);
   const ico=(isNightNow&&['☀️','🌤','⛅'].includes(icoRaw))?'🌙':icoRaw;
 
+  const bsUsed = station.source==='brightsky';
   const current = {
-    temp: Math.round(cur.temperature_2m),
+    temp: bsUsed ? Math.round(bs.weather.temperature) : Math.round(cur.temperature_2m),
     feelsLike: Math.round(cur.apparent_temperature),
     icon: ico, condition: cond, weatherCode: nowCode,
-    wind: Math.round(cur.wind_speed_10m),
-    windDir: windDirLbl(cur.wind_direction_10m),
+    wind: bsUsed ? Math.round(bs.weather.wind_speed_10) : Math.round(cur.wind_speed_10m),
+    windDir: windDirLbl(bsUsed ? bs.weather.wind_direction_10 : cur.wind_direction_10m),
     rain_pct: raw.daily.precipitation_probability_max[0] || 0,
     thunder_pct: thunderPct(nowCode),
-    humidity: Math.round(cur.relative_humidity_2m),
+    humidity: bsUsed ? Math.round(bs.weather.relative_humidity) : Math.round(cur.relative_humidity_2m),
     uv: Math.round(cur.uv_index || 0),
-    sunrise, sunset
+    sunrise, sunset, station
   };
 
   const hourly24=[];
@@ -1766,17 +1796,18 @@ async function loadAll(){
       lat=pos?pos.lat:FALLBACK.lat;lon=pos?pos.lon:FALLBACK.lon;
     }
     setBadge('Wetterdaten werden geladen…');
-    const [main,models,ens,place,warns,satClear,dav]=await Promise.all([
+    const [main,models,ens,place,warns,satClear,dav,brightSky]=await Promise.all([
       fetch(mainUrl(lat,lon)).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
       fetch(modelsUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(ensembleUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null),
       fetchWarnings(lat,lon),
       sampleSatelliteClear(lat,lon),
-      inDavRegion(lat,lon)?fetchDAV():Promise.resolve(null)
+      inDavRegion(lat,lon)?fetchDAV():Promise.resolve(null),
+      isGermany(lat,lon)?fetch(brightSkyUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)
     ]);
     if(!main.current||!main.hourly||!main.daily) throw new Error('Unerwartetes Antwortformat');
-    const data=buildWeatherData(main,models,buildEnsRain(ens),satClear);
+    const data=buildWeatherData(main,models,buildEnsRain(ens),satClear,brightSky);
     data.dav=dav;
     if(warns&&warns.length){
       const top=warns.find(w=>w.severity==='danger')||warns[0];
