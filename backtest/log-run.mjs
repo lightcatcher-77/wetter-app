@@ -9,13 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 const FUSSEN = { lat: 47.5676, lon: 10.7012 };
 const MODELS = ['icon_seamless', 'ecmwf_ifs025', 'ecmwf_ifs', 'gfs_seamless', 'meteofrance_seamless'];
-const LEAD_HOURS = [0, 6, 24, 48, 72]; // deckt W_NEAR (0-48h) und W_FAR (>48h) mit Zwischenpunkten ab
+const LEAD_HOURS = [0, 6, 24, 48, 72, 96, 120, 144, 168]; // 0h bis 7 Tage, ab Tag 3 im Tagesabstand
 
 const PRED_FILE = fileURLToPath(new URL('../backtest-data/predictions.jsonl', import.meta.url));
 const OBS_FILE = fileURLToPath(new URL('../backtest-data/observations.jsonl', import.meta.url));
 
 async function fetchPredictions(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&models=${MODELS.join(',')}&timezone=UTC&forecast_days=4`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability&models=${MODELS.join(',')}&timezone=UTC&forecast_days=9`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
   const json = await res.json();
