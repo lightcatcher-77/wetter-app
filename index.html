@@ -110,6 +110,13 @@
     .hourly-card{margin-bottom:14px;animation:slideUp .6s;}
     .hourly-head{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);padding:18px 22px 12px;}
     .hourly-scroll{overflow-x:auto;padding:0 16px 16px;}
+    /* Gedämpfte, ins dunkle Theme passende Scrollleiste statt des grellen Browser-Standards
+       (heller Track, grauer Balken) — betrifft Stunden- und Tagesleiste. */
+    .hourly-scroll,.fc-scroll{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent;}
+    .hourly-scroll::-webkit-scrollbar,.fc-scroll::-webkit-scrollbar{height:6px;}
+    .hourly-scroll::-webkit-scrollbar-track,.fc-scroll::-webkit-scrollbar-track{background:transparent;}
+    .hourly-scroll::-webkit-scrollbar-thumb,.fc-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:10px;}
+    .hourly-scroll::-webkit-scrollbar-thumb:hover,.fc-scroll::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.3);}
     .hourly-inner{display:flex;gap:8px;width:max-content;}
     .h-cell{background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:12px;padding:10px 8px;text-align:center;width:68px;flex-shrink:0;}
     .h-cell.h-tappable{cursor:pointer;-webkit-tap-highlight-color:rgba(107,163,214,.25);}
@@ -365,13 +372,14 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
         const v=cell.modelVals&&cell.modelVals[m];
         return`<span style="color:${MODEL_HEX[m]}">${MODEL_SHORT[m]}</span> <span class="h-detail-dot" style="background:${rainScaleColor(v)}"></span>${v??'–'}%`;
       }).join(' · ');
-      modelHtml=`<div class="h-dots">${dots}</div><div class="h-detail" hidden>${detail}</div>`;
+      modelHtml=`<div class="h-dots">${dots}</div><div class="h-detail"${hourDetailsOpen?'':' hidden'}>${detail}</div>`;
     }
     // Tap-Handler sitzt auf der ganzen Karte, nicht nur der 5px-Punktreihe — die war auf dem
-    // Handy als Tap-Ziel viel zu klein (unzuverlässig treffbar).
-    return`<div class="${cls}"${hasModels?' onclick="toggleHourDetail(this)"':''}><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}${modelHtml}</div>`;
+    // Handy als Tap-Ziel viel zu klein (unzuverlässig treffbar). Ein Tap auf irgendeine Stunde
+    // klappt alle Stunden gleichzeitig auf/zu (globaler Zustand, siehe toggleHourDetail).
+    return`<div class="${cls}"${hasModels?' onclick="toggleHourDetail()"':''}><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}${modelHtml}</div>`;
   });
-  const legend=activeModels.length>=2?`<div class="hourly-legend">Punkte = Regenwahrscheinlichkeit, dunkler = mehr Regen · feste Reihenfolge ${activeModels.map(m=>MODEL_SHORT[m]).join(' · ')} · antippen für genaue Werte</div>`:'';
+  const legend=activeModels.length>=2?`<div class="hourly-legend">Punkte = Regenwahrscheinlichkeit, dunkler = mehr Regen · feste Reihenfolge ${activeModels.map(m=>MODEL_SHORT[m]).join(' · ')} · eine Stunde antippen zeigt/versteckt alle Werte</div>`:'';
   return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div>${legend}</div>`;
 }
 
@@ -425,11 +433,13 @@ function toggleSection(headEl,bodyId){
     setTimeout(()=>chartInst.resize(),360);
   }
 }
-// Ein-/Ausblenden der Modell-Detailzeile — Tap-Handler sitzt auf der ganzen Stundenkarte (cellEl),
-// nicht nur der Punktreihe, daher hier gezielt die .h-detail-Kindzeile suchen statt nextSibling.
-function toggleHourDetail(cellEl){
-  const detail=cellEl.querySelector('.h-detail');
-  if(detail) detail.hidden=!detail.hidden;
+// Ein-/Ausblenden der Modell-Detailzeilen: globaler Zustand statt pro Karte — ein Tap auf
+// irgendeine Stundenkarte klappt alle gleichzeitig auf bzw. wieder alle zu. makeHourly() liest
+// hourDetailsOpen beim (Neu-)Rendern, damit der Zustand einen Datenrefresh übersteht.
+let hourDetailsOpen=false;
+function toggleHourDetail(){
+  hourDetailsOpen=!hourDetailsOpen;
+  document.querySelectorAll('.h-detail').forEach(el=>{el.hidden=!hourDetailsOpen;});
 }
 
 let chartInst=null,lastFc=[],selDay=-1,lastHourlyNow=null,renderSeq=0;
