@@ -84,6 +84,7 @@
     .radar-badge{flex-shrink:0;font-size:10px;font-weight:700;letter-spacing:1px;padding:3px 9px;border-radius:10px;background:rgba(86,214,140,.12);border:1px solid rgba(86,214,140,.3);color:var(--green);}
     .radar-badge.forecast{background:rgba(245,200,66,.12);border-color:rgba(245,200,66,.35);color:var(--accent);}
     .radar-note{font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.5;}
+    .radar-incoming{margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(242,153,74,.12);border:1px solid rgba(242,153,74,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5;}
     .warning{display:flex;gap:12px;align-items:flex-start;background:rgba(242,153,74,.09);border:1px solid rgba(242,153,74,.25);border-radius:14px;padding:14px 16px;margin-bottom:18px;animation:slideUp .5s;}
     .warning strong{color:var(--orange);}
     .warning p{font-size:13px;color:var(--text-dim);margin-top:3px;line-height:1.6;}
@@ -120,6 +121,12 @@
     .h-rain{font-size:10px;color:var(--blue);margin-top:3px;}
     .h-thunder{font-size:10px;color:var(--accent);font-weight:700;margin-top:2px;}
     .h-wind{font-size:10px;color:var(--text-dim);margin-top:2px;}
+    .h-dots{display:flex;gap:2px;justify-content:center;margin-top:5px;cursor:pointer;}
+    .h-dot{width:5px;height:5px;border-radius:50%;flex:none;}
+    .h-detail{font-size:8px;color:var(--text-dim);margin-top:3px;line-height:1.3;}
+    .h-detail-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin:0 3px 0 3px;vertical-align:middle;}
+    .h-detail[hidden]{display:none;}
+    .hourly-legend{font-size:10px;color:var(--text-dim);padding:0 22px 14px;}
     .fc-scroll{overflow-x:auto;margin-bottom:14px;padding-bottom:6px;}
     .fc-grid{display:grid;gap:8px;animation:slideUp .65s;}
     .fc-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 8px;text-align:center;cursor:pointer;}
@@ -156,7 +163,7 @@
     @media(max-width:620px){.chart-wrap{height:300px;}}
     .chart-model-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--text-dim);}
     .chart-model-legend span{display:inline-flex;align-items:center;gap:6px;}
-    .chart-model-legend .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+    .chart-model-legend .dot{width:8px;height:8px;border-radius:50%;flex:none;animation:none;}
     .section-title{font-family:'Outfit',sans-serif;font-size:18px;color:var(--text-dim);margin-bottom:16px;}
     .section-title.collapsible{cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;margin-bottom:0;}
     .section-title.collapsible .chevron{font-size:14px;transition:transform .25s ease;color:var(--text-dim);}
@@ -179,6 +186,12 @@
     .mm-sep{grid-column:1/-1;border-top:1px solid var(--border);margin:2px 0;}
     .mm-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--text-dim);}
     .mm-legend span{display:inline-flex;align-items:center;gap:6px;}
+    .dav-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(245,200,66,.09);border:1px solid rgba(245,200,66,.25);border-radius:6px;padding:3px 9px;font-size:11px;color:var(--accent);margin-bottom:12px;}
+    .dav-days{display:flex;flex-direction:column;gap:10px;}
+    .dav-day{display:flex;flex-direction:column;gap:2px;}
+    .dav-day-lbl{font-size:12px;color:var(--text-dim);font-weight:500;}
+    .dav-day-txt{font-size:14px;line-height:1.5;color:var(--text);}
+    .dav-stand{margin-top:12px;font-size:11px;color:var(--text-dim);}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -233,6 +246,7 @@
       </div>
     </div>
     <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
+    <div class="radar-incoming" id="radar-incoming" style="display:none"></div>
   </div>
   <div id="content-bottom"></div>
   <div id="check-result" style="text-align:center;padding:0 0 8px"></div>
@@ -240,14 +254,24 @@
 <script>
 // ── Konfiguration ────────────────────────────────────────────────────────────
 const FALLBACK = { lat: 47.5676, lon: 10.7012, name: 'Füssen' };
-const MODELS = ['icon_seamless','ecmwf_ifs025','gfs_seamless','meteofrance_seamless'];
-const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE/AROME' };
-const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
+const MODELS = ['icon_seamless','ecmwf_ifs025','ecmwf_ifs','gfs_seamless','meteofrance_seamless'];
+const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE/AROME' };
+// Kurzform für kompakte Anzeigen (z.B. Stunden-Detailzeile) — "IFS"/"IFS HD" dürfen sich dort nicht auf denselben Buchstaben abkürzen.
+const MODEL_SHORT = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS-HD', gfs_seamless:'GFS', meteofrance_seamless:'ARP' };
+const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', ecmwf_ifs:'#b48eec', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
 // Dieselben Modellfarben als konkrete Hex-Werte — Canvas kann var(--x) nicht auflösen.
-const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
+const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
 function hexToRgba(hex,a){
   const n=parseInt(hex.slice(1),16);
   return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+// Einheitliche Blau-Skala für Regenwahrscheinlichkeit (Stundenkarten-Punkte + Detail-Dots) —
+// dieselbe Farbfamilie wie die Regen-Zellen im Modellvergleich (renderModelMatrix, mm-cell),
+// damit "wie viel Regen" app-weit immer denselben Farbverlauf nutzt. Das Modell selbst wird
+// separat kodiert (Label- bzw. Legendenfarbe), nicht mehr über die Punktfarbe.
+function rainScaleColor(pct){
+  const v=pct==null?0:Math.max(0,Math.min(100,pct));
+  return hexToRgba('#6ba3d6',0.18+(v/100)*0.82);
 }
 const CACHE_KEY = 'wetter-live-cache-v1';
 const FAVS_KEY = 'wetter-favs-v1';
@@ -308,14 +332,35 @@ function makeHourly(hourly24,sunrise,sunset,utcOffset){
   if(future.length<6){
     return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div style="padding:20px 22px;font-size:13px;color:var(--orange)">⚠️ Stundendaten veraltet — bitte neu laden (↻).</div></div>`;
   }
+  // Modelle, die für mindestens eine der nächsten 24h einen Regenwert liefern — Basis für die
+  // Multi-Modell-Punktreihe je Stundenkarte (analog renderModelMatrix in der Tagesansicht).
+  const activeModels = MODELS.filter(m=>future.some(c=>c.modelVals&&c.modelVals[m]!=null));
   const cells=future.map((cell,i)=>{
     const isNow=i===0,isNight=isNightH(cell.h),isStorm=cell.thunder>40;
     const icon=(isNight&&SUN.includes(cell.icon))?'🌙':cell.icon;
     const rainTxt=cell.rain>0?`💧${cell.rain}%`:`<span style="opacity:.3">💧–</span>`;
     const cls=['h-cell',isNow?'h-now':'',isNight?'h-night':'',isStorm?'h-storm':''].filter(Boolean).join(' ');
-    return`<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}</div>`;
+    let modelHtml='';
+    if(activeModels.length>=2){
+      // Punktreihe: einheitlicher Blau-Verlauf (rainScaleColor) statt Modellfarbe — die Punkte
+      // zeigen ausschließlich die Regenwahrscheinlichkeits-Intensität je Modellposition. Welche
+      // Position welches Modell ist, steht in der Legende unten (feste Reihenfolge wie MODELS).
+      const dots=activeModels.map(m=>{
+        const v=cell.modelVals&&cell.modelVals[m];
+        return`<span class="h-dot" style="background:${rainScaleColor(v)}"></span>`;
+      }).join('');
+      // Detailzeile: Modell-Kürzel in der jeweiligen Modellfarbe (Identität), der kleine Punkt
+      // daneben in derselben einheitlichen Blau-Skala wie oben (Intensität) — getrennt kodiert.
+      const detail=activeModels.map(m=>{
+        const v=cell.modelVals&&cell.modelVals[m];
+        return`<span style="color:${MODEL_HEX[m]}">${MODEL_SHORT[m]}</span> <span class="h-detail-dot" style="background:${rainScaleColor(v)}"></span>${v??'–'}%`;
+      }).join(' · ');
+      modelHtml=`<div class="h-dots" onclick="toggleHourDetail(this)">${dots}</div><div class="h-detail" hidden>${detail}</div>`;
+    }
+    return`<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':cell.time}</div><span class="h-icon">${icon}</span><div class="h-temp" style="color:${tempCol(cell.temp)}">${cell.temp}°</div><div class="h-rain">${rainTxt}</div>${cell.rainMm>=0.1?`<div class="h-rain">${cell.rainMm}mm</div>`:''}${cell.thunder>25?`<div class="h-thunder">⚡${cell.thunder}%</div>`:''}${cell.wind>30?`<div class="h-wind">🌬${cell.wind}</div>`:''}${modelHtml}</div>`;
   });
-  return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div></div>`;
+  const legend=activeModels.length>=2?`<div class="hourly-legend">Punkte = Regenwahrscheinlichkeit, dunkler = mehr Regen · feste Reihenfolge ${activeModels.map(m=>MODEL_SHORT[m]).join(' · ')} · antippen für genaue Werte</div>`:'';
+  return`<div class="card hourly-card"><div class="hourly-head">⏱ Nächste 24 Stunden</div><div class="hourly-scroll"><div class="hourly-inner">${cells.join('')}</div></div>${legend}</div>`;
 }
 
 // Modellvergleich: Regenrisiko, -menge & Wetterlage je Modell nebeneinander.
@@ -368,13 +413,24 @@ function toggleSection(headEl,bodyId){
     setTimeout(()=>chartInst.resize(),360);
   }
 }
+// Ein-/Ausblenden der Modell-Detailzeile unter der Punktreihe einer Stundenkarte.
+function toggleHourDetail(dotsEl){
+  const detail=dotsEl.nextElementSibling;
+  if(detail) detail.hidden=!detail.hidden;
+}
 
-let chartInst=null,lastFc=[],selDay=-1;
+let chartInst=null,lastFc=[],selDay=-1,lastHourlyNow=null,renderSeq=0;
 function render(data){
   if(chartInst){chartInst.destroy();chartInst=null;}
   selDay=-1;
+  const mySeq=++renderSeq;
   const cur=data.current,m=data.meta;
   modelExpectsRain=isRainCode(cur.weatherCode);
+  // Für den Radar-Nowcast-Abgleich (radarCheckIncoming): Konsens-Regenwert der aktuell
+  // angezeigten "Jetzt"-Stunde, unabhängig davon ob/wann das Radar fertig geladen ist.
+  const _nowHourISO=nowHourISOAt(m&&m.utcOffset);
+  lastHourlyNow=(data.hourly24||[]).find(c=>c.iso.slice(0,13)>=_nowHourISO)||null;
+  radarCheckIncoming();
   // Client-side filter: immer ab heute (Ortszeit), max 7 Tage — funktioniert auch wenn Daten 1-2 Tage alt sind
   const _p=locParts(m&&m.utcOffset);
   const _todayMid=new Date(_p.y,_p.mo-1,_p.d);
@@ -450,6 +506,7 @@ function render(data){
       </div>
     </div>
     ${renderModelMatrix(fc)}
+    ${renderDavCard(data.dav)}
     <div class="card scores-card">
       <div class="section-title">🥾 Outdoor-Score (10 = ideal)</div>
       <div class="score-grid" style="grid-template-columns:repeat(${n},1fr)">
@@ -473,6 +530,7 @@ function render(data){
   document.getElementById('content-top').innerHTML=htmlTop;
   document.getElementById('content-bottom').innerHTML=htmlBottom;
   setTimeout(()=>{
+    if(mySeq!==renderSeq)return; // neuerer render()-Aufruf ist bereits unterwegs/fertig
     const ctx=document.getElementById('tempChart');
     if(!ctx)return;
     // Einzelmodell-Linien: je Modell in dessen eigener Farbe (wie im Modellvergleich),
@@ -557,10 +615,10 @@ function render(data){
         labels:fc.map(r=>r.wd+' '+r.date),
         datasets:[
           ...modelDatasets,
-          {label:'Max °C',data:fc.map(r=>r.max),borderColor:'#f5c842',backgroundColor:'rgba(245,200,66,.12)',fill:true,tension:0.4,borderWidth:3,
-           pointBackgroundColor:fc.map((_,i)=>i===bestI?'#56d68c':'#f5c842'),
+          {label:'Max °C',data:fc.map(r=>r.max),borderColor:'#f4f6fb',backgroundColor:'rgba(244,246,251,.12)',fill:true,tension:0.4,borderWidth:3,
+           pointBackgroundColor:fc.map((_,i)=>i===bestI?'#56d68c':'#f4f6fb'),
            pointRadius:fc.map((_,i)=>i===bestI?8:5)},
-          {label:'Min °C',data:fc.map(r=>r.min),borderColor:'#6ba3d6',backgroundColor:'rgba(107,163,214,.06)',fill:false,tension:0.4,borderWidth:3,pointBackgroundColor:'#6ba3d6',pointRadius:4}
+          {label:'Min °C',data:fc.map(r=>r.min),borderColor:'#2ec4b6',backgroundColor:'rgba(46,196,182,.06)',fill:false,tension:0.4,borderWidth:3,pointBackgroundColor:'#2ec4b6',pointRadius:4}
         ]
       },
       options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
@@ -788,8 +846,13 @@ function modelPairs(obj,base,i){
 }
 // Lead-time-abhängige Gewichte: nah dran zählt ICON-D2-Auflösung mehr,
 // ab Tag 3 verliert ICON an Reichweite und ECMWF (bestes Modell im Mittelfrist-Bereich) übernimmt.
-const W_NEAR = { icon_seamless:0.40, ecmwf_ifs025:0.30, gfs_seamless:0.15, meteofrance_seamless:0.15 }; // 0-48h
-const W_FAR  = { icon_seamless:0.20, ecmwf_ifs025:0.45, gfs_seamless:0.20, meteofrance_seamless:0.15 }; // >48h
+// Stand 06.08.2026: ICON-D2 war zuletzt im Nahbereich bei Regen wiederholt unzuverlässiger als
+// die IFS-Modelle — ICON-Gewicht dort reduziert, IFS-Familie gestärkt. ecmwf_ifs ("IFS HD", ~9km)
+// liefert eine echte zusätzliche Meinung bei Temperatur/Regenmenge, bei der Regenwahrscheinlichkeit
+// aber dieselben Werte wie ecmwf_ifs025 (beide aus demselben IFS-Ensemble abgeleitet) — daher
+// bewusst moderat statt hoch gewichtet, um dessen Regen-Stimme nicht künstlich zu verdoppeln.
+const W_NEAR = { icon_seamless:0.30, ecmwf_ifs025:0.25, ecmwf_ifs:0.15, gfs_seamless:0.15, meteofrance_seamless:0.15 }; // 0-48h
+const W_FAR  = { icon_seamless:0.15, ecmwf_ifs025:0.35, ecmwf_ifs:0.15, gfs_seamless:0.20, meteofrance_seamless:0.15 }; // >48h
 function weightsForHour(hoursAhead){ return hoursAhead<=48 ? W_NEAR : W_FAR; }
 function weightsForDay(dayIndex){ return dayIndex<=1 ? W_NEAR : W_FAR; }
 function weightedMedian(pairs, weights){
@@ -888,12 +951,15 @@ function buildWeatherData(raw, rawM, ensRain, satClear){
     let temp = raw.hourly.temperature_2m[idx];
     let rain = raw.hourly.precipitation_probability[idx] || 0;
     const mi = mHourIdx[t];
+    let hModelVals = {};
     if (mi!=null) {
       const w = weightsForHour(i);
       const tp = modelPairs(rawM.hourly,'temperature_2m',mi);
       if (tp.length>=2) temp = weightedMedian(tp,w);
       const rp = modelPairs(rawM.hourly,'precipitation_probability',mi);
       if (rp.length>=2) rain = weightedMedian(rp,w);
+      // Einzelwerte je Modell für die Multi-Modell-Punkte in der Stundenkarte (siehe makeHourly).
+      rp.forEach(([m,v])=>{ hModelVals[m] = Math.round(v); });
     }
     if (ensRain && ensRain[t]!=null) rain = ensRain[t];
     hourly24.push({
@@ -902,7 +968,8 @@ function buildWeatherData(raw, rawM, ensRain, satClear){
       rain:Math.round(rain),
       rainMm:Math.round((raw.hourly.precipitation[idx]||0)*10)/10,
       thunder: thunderPct(raw.hourly.weather_code[idx]),
-      snow:0, wind:Math.round(raw.hourly.wind_speed_10m[idx]), icon:ic
+      snow:0, wind:Math.round(raw.hourly.wind_speed_10m[idx]), icon:ic,
+      modelVals: hModelVals
     });
   }
 
@@ -1077,12 +1144,76 @@ async function fetchWarnings(lat,lon){
   return out;
 }
 
+// ── Bergwetter (DAV Alpenvereins-Wetterbericht) ──────────────────────────────
+// Fester Regionaltext (Allgäuer/Bayerische Alpen West) — macht nur beim Füssen-nahen
+// Standort Sinn, deshalb Bounding-Box-Gate wie schon bei den Österreich-Warnungen oben.
+function inDavRegion(lat,lon){ return lat>=46.9&&lat<=47.9&&lon>=9.6&&lon<=11.3; }
+const DAV_URL='https://www.alpenverein.de/bergwetter/alpen/allgauer-und-bayerische-alpen-west-osterreich-nord';
+const JINA_URL='https://r.jina.ai/'; // Lese-Proxy mit offenen CORS-Headern
+// Prognosetext aus der Jina-Reader-Ausgabe parsen (Tagesüberschrift + Prognosesatz).
+function parseDAV(text){
+  if(!text||text.length<50) return null;
+  const DAYS='Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag';
+  const headRe=new RegExp('(?:Trend ab\\s+)?(?:'+DAYS+'),?\\s*\\d{2}\\.\\d{2}\\.\\d{4}','g');
+  const heads=[];
+  let m;
+  while((m=headRe.exec(text))!==null) heads.push({label:m[0].replace(/^#+\s*/,'').trim(),idx:m.index,end:headRe.lastIndex});
+  if(!heads.length) return null;
+  const days=[],seen=new Set();
+  for(let i=0;i<heads.length;i++){
+    const stop=i+1<heads.length?heads[i+1].idx:text.length;
+    let chunk=text.slice(heads[i].end,stop);
+    let sentence=chunk.split(/Letzte Aktualisierung/)[0].split(/\n\s*\|/)[0];
+    sentence=sentence.replace(/[#*_>`]/g,'').replace(/\s+/g,' ').trim();
+    const label=heads[i].label;
+    if(sentence&&/[a-zäöü]/i.test(sentence)&&sentence.length>=8&&sentence.length<=400&&!sentence.includes('|')&&!seen.has(label)){
+      seen.add(label);
+      days.push({label,text:sentence});
+    }
+    if(days.length>=6) break;
+  }
+  if(!days.length) return null;
+  let stand=null;
+  const sm=text.match(/Letzte Aktualisierung[^:]*:\s*([\d.]+)\s*um\s*([\d:]+)/);
+  if(sm) stand=sm[1].replace(/\.$/,'')+' '+sm[2].slice(0,5)+' Uhr';
+  return {live:true,source:'DAV Bergwetter · GeoSphere Austria',region:'Allgäuer und Bayerische Alpen West',stand,days};
+}
+// Best-effort: liefert null bei Fehlschlag (kein fiktiver Fallback-Text mit veraltetem Datum) —
+// die Karte wird dann in render() einfach nicht angezeigt.
+async function fetchDAV(){
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),8000);
+  try{
+    const resp=await fetch(JINA_URL+DAV_URL,{headers:{'Accept':'text/plain'},signal:ctrl.signal});
+    if(!resp.ok) throw new Error('Jina-Reader Status '+resp.status);
+    const parsed=parseDAV(await resp.text());
+    return (parsed&&parsed.days&&parsed.days.length)?parsed:null;
+  }catch(e){
+    console.warn('DAV-Bergwetter nicht verfügbar:',e.message);
+    return null;
+  }finally{clearTimeout(t);}
+}
+// Bergwetter-Karte — einklappbar wie Chart/Modellvergleich, nutzt dieselbe Card-Optik.
+function renderDavCard(dav){
+  if(!dav||!dav.days||!dav.days.length) return '';
+  const badge=dav.live?'🟢 Live abgerufen':'🔵 Snapshot';
+  const items=dav.days.map(d=>`<div class="dav-day"><span class="dav-day-lbl">${esc(d.label)}</span><span class="dav-day-txt">${esc(d.text)}</span></div>`).join('');
+  return `<div class="card model-matrix-card">
+    <div class="section-title collapsible" onclick="toggleSection(this,'dav-body')">⛰️ Bergwetter · ${esc(dav.region)}<span class="chevron">▾</span></div>
+    <div class="collapse-body" id="dav-body">
+      <div class="dav-badge">${badge} · ${esc(dav.source)}</div>
+      <div class="dav-days">${items}</div>
+      ${dav.stand?`<div class="dav-stand">Wetterdienst-Stand: ${esc(dav.stand)}</div>`:''}
+    </div>
+  </div>`;
+}
+
 // ── Regenradar (RainViewer) + Wolkenradar (EUMETSAT Satellit) ────────────────
 let radarMap=null, radarLayer=null, radarMarker=null;
 let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Kartenbereich aktiv ist
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
 let satFrames=[]; // {time} — synthetisiert, RainViewer liefert hierfür keine Frame-Liste
-let radarLoc=null, radarSampleCanvas=null, radarSampleCtx=null, radarSampleSeq=0;
+let radarLoc=null, radarSampleSeq=0;
 function activeFrames(){return radarMode==='rain'?radarFrames:satFrames;}
 function activePastLen(){return radarMode==='rain'?radarPastLen:satFrames.length;}
 
@@ -1149,35 +1280,69 @@ function radarSetFlag(info){
   el.textContent=`📡 Laut Radar: ${info.label}`;
   el.className='radar-flag '+info.level;
 }
+// Lädt ein Radar-Tile für den angegebenen Frame-Index und klassifiziert den Pixel an loc.
+// Eigene Canvas pro Aufruf statt einer geteilten Instanz — wird u.a. mit mehreren Nowcast-Frames
+// parallel aufgerufen (radarCheckIncoming), eine geteilte Canvas würde dort Race Conditions erzeugen.
+function radarClassifyFrameAtLoc(frameIdx,loc){
+  return new Promise(resolve=>{
+    const frame=radarFrames[frameIdx];
+    if(!loc||!frame||!radarHost){resolve(null);return;}
+    const z=7;
+    const{tx,ty,px,py}=radarTileCoords(loc.lat,loc.lon,z);
+    const url=`${radarHost}${frame.path}/256/${z}/${tx}/${ty}/2/1_1.png`;
+    const img=new Image();
+    img.crossOrigin='anonymous';
+    img.onload=()=>{
+      try{
+        const canvas=document.createElement('canvas');
+        canvas.width=256;canvas.height=256;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(img,0,0);
+        resolve(radarClassifyPixel(ctx.getImageData(px,py,1,1).data));
+      }catch(e){resolve(null);}
+    };
+    img.onerror=()=>resolve(null);
+    img.src=url;
+  });
+}
 function radarSampleAtLocation(){
   // Sampelt bewusst immer den "Jetzt"-Referenzframe (letzter Vergangenheits-Frame),
   // unabhängig davon, welchen Zeitpunkt der Slider gerade anzeigt — das Badge im
   // aktuellen Wetterstatus soll nicht durch Zurückspulen auf der Zeitleiste verfälscht werden.
   if(!radarLoc||!radarFrames.length||!radarHost){radarSetFlag(null);return;}
-  const frame=radarFrames[radarPastLen-1];
-  if(!frame)return;
-  const z=7;
-  const{tx,ty,px,py}=radarTileCoords(radarLoc.lat,radarLoc.lon,z);
-  const url=`${radarHost}${frame.path}/256/${z}/${tx}/${ty}/2/1_1.png`;
-  const seq=++radarSampleSeq;
-  const img=new Image();
-  img.crossOrigin='anonymous';
-  img.onload=()=>{
-    if(seq!==radarSampleSeq)return;
-    if(!radarSampleCanvas){
-      radarSampleCanvas=document.createElement('canvas');
-      radarSampleCanvas.width=256;radarSampleCanvas.height=256;
-      radarSampleCtx=radarSampleCanvas.getContext('2d');
-    }
-    radarSampleCtx.clearRect(0,0,256,256);
-    radarSampleCtx.drawImage(img,0,0);
-    try{
-      const d=radarSampleCtx.getImageData(px,py,1,1).data;
-      radarSetFlag(radarClassifyPixel(d));
-    }catch(e){radarSetFlag(null);}
-  };
-  img.onerror=()=>{if(seq===radarSampleSeq)radarSetFlag(null);};
-  img.src=url;
+  const loc=radarLoc, seq=++radarSampleSeq;
+  radarClassifyFrameAtLoc(radarPastLen-1,loc).then(info=>{
+    if(seq===radarSampleSeq)radarSetFlag(info);
+  });
+  radarCheckIncoming();
+}
+// Vergleicht RainViewers eigenen Kurzfrist-Nowcast (siehe fetchRadarFrames, ~30-60 Min. Horizont,
+// Bewegungsextrapolation aus Radarechos) am exakten Standort mit der Modell-Konsens-Regenwahr-
+// scheinlichkeit der aktuellen Stunde (lastHourlyNow, siehe render()). Deckt genau den Fall ab,
+// dass das Radar eine herannahende Regenzelle zeigt, die die (gröber auflösenden) Modelle
+// kurzfristig noch nicht erfassen.
+let radarIncomingSeq=0;
+async function radarCheckIncoming(){
+  const el=document.getElementById('radar-incoming');
+  if(!el)return;
+  const futureSteps=radarFrames.length-radarPastLen;
+  if(!radarLoc||!radarFrames.length||!radarHost||futureSteps<1||!lastHourlyNow){
+    el.style.display='none';
+    return;
+  }
+  const loc=radarLoc, seq=++radarIncomingSeq, stepMin=radarFrameStepMin();
+  const nowcastIdxs=[];
+  for(let i=radarPastLen;i<radarFrames.length;i++) nowcastIdxs.push(i);
+  const results=await Promise.all(nowcastIdxs.map(i=>radarClassifyFrameAtLoc(i,loc)));
+  if(seq!==radarIncomingSeq)return;
+  let firstIncomingMin=null;
+  results.forEach((info,idx)=>{ if(info&&firstIncomingMin==null) firstIncomingMin=(idx+1)*stepMin; });
+  if(firstIncomingMin!=null&&firstIncomingMin<=60&&lastHourlyNow.rain<30){
+    el.style.display='block';
+    el.textContent=`📡 Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
+  }else{
+    el.style.display='none';
+  }
 }
 async function fetchRadarFrames(){
   if(!radarMap)return;
@@ -1601,16 +1766,18 @@ async function loadAll(){
       lat=pos?pos.lat:FALLBACK.lat;lon=pos?pos.lon:FALLBACK.lon;
     }
     setBadge('Wetterdaten werden geladen…');
-    const [main,models,ens,place,warns,satClear]=await Promise.all([
+    const [main,models,ens,place,warns,satClear,dav]=await Promise.all([
       fetch(mainUrl(lat,lon)).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
       fetch(modelsUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(ensembleUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null),
       fetchWarnings(lat,lon),
-      sampleSatelliteClear(lat,lon)
+      sampleSatelliteClear(lat,lon),
+      inDavRegion(lat,lon)?fetchDAV():Promise.resolve(null)
     ]);
     if(!main.current||!main.hourly||!main.daily) throw new Error('Unerwartetes Antwortformat');
     const data=buildWeatherData(main,models,buildEnsRain(ens),satClear);
+    data.dav=dav;
     if(warns&&warns.length){
       const top=warns.find(w=>w.severity==='danger')||warns[0];
       data.warning={title:top.title+(warns.length>1?` (+${warns.length-1} weitere)`:''),text:top.text,severity:top.severity};
