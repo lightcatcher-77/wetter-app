@@ -1260,6 +1260,11 @@ function renderDavCard(dav){
 }
 
 // ── Regenradar (RainViewer) + Wolkenradar (EUMETSAT Satellit) ────────────────
+// Grobes Deutschland-Gate für die Vorwarnung (dwdRadarCheckIncoming) — der DWD-WMS
+// deckt nur Deutschland ab, außerhalb wird auf RainViewer zurückgefallen. Bewusst
+// großzügig, Ungenauigkeit an der Grenze ist unkritisch (DWD liefert dort einfach
+// leere/transparente Bilder statt eines Fehlers).
+function inGermany(lat,lon){ return lat>=47.2&&lat<=55.1&&lon>=5.8&&lon<=15.1; }
 let radarMap=null, radarLayer=null, radarMarker=null;
 let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Kartenbereich aktiv ist
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
@@ -1367,30 +1372,85 @@ function radarSampleAtLocation(){
   });
   radarCheckIncoming();
 }
-// Vergleicht RainViewers eigenen Kurzfrist-Nowcast (siehe fetchRadarFrames, ~30-60 Min. Horizont,
-// Bewegungsextrapolation aus Radarechos) am exakten Standort mit der Modell-Konsens-Regenwahr-
-// scheinlichkeit der aktuellen Stunde (lastHourlyNow, siehe render()). Deckt genau den Fall ab,
-// dass das Radar eine herannahende Regenzelle zeigt, die die (gröber auflösenden) Modelle
-// kurzfristig noch nicht erfassen.
+// DWD-eigener WMS-Radar (RV-Produkt: Analyse + echte ~2h-Vorhersage, 1km, 5-Min-Raster,
+// nur Deutschland) — präziser & verlässlicher als RainViewers Nowcast, der oft leer ist
+// (per Live-Test bestätigt: RainViewer lieferte 0 Nowcast-Frames, während der DWD-Layer
+// zum selben Zeitpunkt plausible Vorhersagedaten hatte). Statt eines Einzelpixels wird
+// eine kleine Bbox (~8-10km) um den Standort abgefragt, damit eine nahe, aber noch nicht
+// exakt über dem Standort liegende Regenzelle nicht übersehen wird.
+function dwdBbox(loc){
+  const dLat=0.05, dLon=0.08;
+  return `${loc.lon-dLon},${loc.lat-dLat},${loc.lon+dLon},${loc.lat+dLat}`;
+}
+function dwdClassifyAreaAtTime(loc,isoTime){
+  return new Promise(resolve=>{
+    const url='https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.1.1&request=GetMap'+
+      '&layers=dwd:Radar_rv_product_1x1km_ger&styles=&bbox='+dwdBbox(loc)+
+      '&width=50&height=50&srs=EPSG:4326&format=image/png&transparent=true&time='+isoTime;
+    const img=new Image();
+    img.crossOrigin='anonymous';
+    img.onload=()=>{
+      try{
+        const canvas=document.createElement('canvas');
+        canvas.width=50;canvas.height=50;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(img,0,0);
+        const d=ctx.getImageData(0,0,50,50).data;
+        let rain=false;
+        for(let i=3;i<d.length;i+=4){ if(d[i]>25){rain=true;break;} }
+        resolve(rain);
+      }catch(e){resolve(false);}
+    };
+    img.onerror=()=>resolve(false);
+    img.src=url;
+  });
+}
+// Zeitschritte 0/15/30/45/60 Min., auf das 5-Minuten-Raster der DWD-Zeitdimension abgerundet.
+function dwdTimeSteps(){
+  const now=new Date();
+  now.setUTCSeconds(0,0);
+  now.setUTCMinutes(Math.floor(now.getUTCMinutes()/5)*5);
+  return [0,15,30,45,60].map(m=>new Date(now.getTime()+m*60000).toISOString());
+}
+async function dwdRadarCheckIncoming(loc){
+  const results=await Promise.all(dwdTimeSteps().map(t=>dwdClassifyAreaAtTime(loc,t)));
+  let firstIncomingMin=null;
+  results.forEach((rain,idx)=>{ if(rain&&firstIncomingMin==null) firstIncomingMin=idx*15; });
+  return firstIncomingMin;
+}
+// Vergleicht die Vorwarnung (DWD für deutsche Standorte, sonst RainViewers eigener Kurzfrist-
+// Nowcast als Fallback — siehe fetchRadarFrames, ~30-60 Min. Horizont, Bewegungsextrapolation
+// aus Radarechos) am Standort mit der Modell-Konsens-Regenwahrscheinlichkeit der aktuellen
+// Stunde (lastHourlyNow, siehe render()). Deckt genau den Fall ab, dass eine herannahende
+// Regenzelle sichtbar ist, die die (gröber auflösenden) Modelle kurzfristig noch nicht erfassen.
 let radarIncomingSeq=0;
 async function radarCheckIncoming(){
   const el=document.getElementById('radar-incoming');
   if(!el)return;
-  const futureSteps=radarFrames.length-radarPastLen;
-  if(!radarLoc||!radarFrames.length||!radarHost||futureSteps<1||!lastHourlyNow){
+  if(!radarLoc||!lastHourlyNow){
     el.style.display='none';
     return;
   }
-  const loc=radarLoc, seq=++radarIncomingSeq, stepMin=radarFrameStepMin();
-  const nowcastIdxs=[];
-  for(let i=radarPastLen;i<radarFrames.length;i++) nowcastIdxs.push(i);
-  const results=await Promise.all(nowcastIdxs.map(i=>radarClassifyFrameAtLoc(i,loc)));
-  if(seq!==radarIncomingSeq)return;
+  const loc=radarLoc, seq=++radarIncomingSeq;
   let firstIncomingMin=null;
-  results.forEach((info,idx)=>{ if(info&&firstIncomingMin==null) firstIncomingMin=(idx+1)*stepMin; });
+  if(inGermany(loc.lat,loc.lon)){
+    firstIncomingMin=await dwdRadarCheckIncoming(loc);
+  }else{
+    const futureSteps=radarFrames.length-radarPastLen;
+    if(radarFrames.length&&radarHost&&futureSteps>=1){
+      const stepMin=radarFrameStepMin();
+      const nowcastIdxs=[];
+      for(let i=radarPastLen;i<radarFrames.length;i++) nowcastIdxs.push(i);
+      const results=await Promise.all(nowcastIdxs.map(i=>radarClassifyFrameAtLoc(i,loc)));
+      results.forEach((info,idx)=>{ if(info&&firstIncomingMin==null) firstIncomingMin=(idx+1)*stepMin; });
+    }
+  }
+  if(seq!==radarIncomingSeq)return;
   if(firstIncomingMin!=null&&firstIncomingMin<=60&&lastHourlyNow.rain<30){
     el.style.display='block';
-    el.textContent=`📡 Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
+    el.textContent=firstIncomingMin===0
+      ? `📡 Laut Radar gerade Regen in der Nähe — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`
+      : `📡 Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
   }else{
     el.style.display='none';
   }
