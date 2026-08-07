@@ -264,13 +264,17 @@
 <script>
 // ── Konfiguration ────────────────────────────────────────────────────────────
 const FALLBACK = { lat: 47.5676, lon: 10.7012, name: 'Füssen' };
-const MODELS = ['icon_seamless','ecmwf_ifs025','ecmwf_ifs','gfs_seamless','meteofrance_seamless'];
-const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE/AROME' };
-// Kurzform für kompakte Anzeigen (z.B. Stunden-Detailzeile) — "IFS"/"IFS HD" dürfen sich dort nicht auf denselben Buchstaben abkürzen.
-const MODEL_SHORT = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS-HD', gfs_seamless:'GFS', meteofrance_seamless:'ARP' };
-const MODEL_COLOR = { icon_seamless:'var(--accent)', ecmwf_ifs025:'var(--blue)', ecmwf_ifs:'#b48eec', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
+// ecmwf_ifs025 bewusst entfernt: liefert bei der Regenwahrscheinlichkeit dieselben Werte wie
+// ecmwf_ifs ("IFS HD", ~9km, siehe W_NEAR/W_FAR) — zwei Spalten für dieselbe Zahl waren unnötig.
+// Stattdessen meteoswiss_icon_ch1 (1km, Alpenraum-Spezialmodell) neu dabei: eine echte
+// zusätzliche Meinung gerade im kurzfristigen Bereich, in dem sie noch Daten liefert (~33h Horizont).
+const MODELS = ['icon_seamless','meteoswiss_icon_ch1','ecmwf_ifs','gfs_seamless','meteofrance_seamless'];
+const MODEL_LBL = { icon_seamless:'ICON', meteoswiss_icon_ch1:'ICON-CH1', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE/AROME' };
+// Kurzform für kompakte Anzeigen (z.B. Stunden-Detailzeile) — "ICON"/"ICON-CH1" dürfen sich dort nicht auf denselben Buchstaben abkürzen.
+const MODEL_SHORT = { icon_seamless:'ICON', meteoswiss_icon_ch1:'CH1', ecmwf_ifs:'IFS-HD', gfs_seamless:'GFS', meteofrance_seamless:'ARP' };
+const MODEL_COLOR = { icon_seamless:'var(--accent)', meteoswiss_icon_ch1:'#e8536b', ecmwf_ifs:'#b48eec', gfs_seamless:'var(--green)', meteofrance_seamless:'var(--orange)' };
 // Dieselben Modellfarben als konkrete Hex-Werte — Canvas kann var(--x) nicht auflösen.
-const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
+const MODEL_HEX = { icon_seamless:'#f5c842', meteoswiss_icon_ch1:'#e8536b', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
 function hexToRgba(hex,a){
   const n=parseInt(hex.slice(1),16);
   return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
@@ -886,15 +890,14 @@ function modelPairs(obj,base,i){
   }
   return out;
 }
-// Lead-time-abhängige Gewichte: nah dran zählt ICON-D2-Auflösung mehr,
+// Lead-time-abhängige Gewichte: nah dran zählt hochauflösende Regionalmodell-Auflösung mehr,
 // ab Tag 3 verliert ICON an Reichweite und ECMWF (bestes Modell im Mittelfrist-Bereich) übernimmt.
-// Stand 06.08.2026: ICON-D2 war zuletzt im Nahbereich bei Regen wiederholt unzuverlässiger als
-// die IFS-Modelle — ICON-Gewicht dort reduziert, IFS-Familie gestärkt. ecmwf_ifs ("IFS HD", ~9km)
-// liefert eine echte zusätzliche Meinung bei Temperatur/Regenmenge, bei der Regenwahrscheinlichkeit
-// aber dieselben Werte wie ecmwf_ifs025 (beide aus demselben IFS-Ensemble abgeleitet) — daher
-// bewusst moderat statt hoch gewichtet, um dessen Regen-Stimme nicht künstlich zu verdoppeln.
-const W_NEAR = { icon_seamless:0.30, ecmwf_ifs025:0.25, ecmwf_ifs:0.15, gfs_seamless:0.15, meteofrance_seamless:0.15 }; // 0-48h
-const W_FAR  = { icon_seamless:0.15, ecmwf_ifs025:0.35, ecmwf_ifs:0.15, gfs_seamless:0.20, meteofrance_seamless:0.15 }; // >48h
+// Stand 07.08.2026: ICON-D2 war zuletzt im Nahbereich bei Regen wiederholt unzuverlässiger als
+// die IFS-Modelle — ICON-Gewicht dort reduziert. meteoswiss_icon_ch1 (1km, Alpenraum) liefert nur
+// für die ersten ~33h Daten und zählt daher nur in W_NEAR nennenswert mit; darüber hinaus fehlt der
+// Wert einfach (weightedMedian ignoriert fehlende Modelle), das Gewicht in W_FAR ist dann irrelevant.
+const W_NEAR = { icon_seamless:0.25, meteoswiss_icon_ch1:0.20, ecmwf_ifs:0.25, gfs_seamless:0.15, meteofrance_seamless:0.15 }; // 0-48h
+const W_FAR  = { icon_seamless:0.15, meteoswiss_icon_ch1:0.05, ecmwf_ifs:0.50, gfs_seamless:0.20, meteofrance_seamless:0.15 }; // >48h
 function weightsForHour(hoursAhead){ return hoursAhead<=48 ? W_NEAR : W_FAR; }
 function weightsForDay(dayIndex){ return dayIndex<=1 ? W_NEAR : W_FAR; }
 function weightedMedian(pairs, weights){
