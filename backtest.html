@@ -42,6 +42,9 @@
   .loading{color:var(--text-dim);font-size:13px;padding:20px;text-align:center;}
   .err{color:var(--red);font-size:13px;padding:20px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+  .card h2 .hint{font-weight:400;color:var(--text-dim);font-size:12px;display:block;margin-top:2px;}
+  .diff{font-weight:700;}
+  .rain-yes{color:var(--blue);}
 </style>
 </head>
 <body>
@@ -56,6 +59,13 @@
 
   <div class="card">
     <div class="toolbar">
+      <h2>Vorhersage vs. Realität <span class="hint">Vorhergesagter und tatsächlicher Wert für denselben Zeitpunkt, direkt nebeneinander</span></h2>
+    </div>
+    <div class="tablewrap"><div id="compare-table" class="loading">Lädt …</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
       <h2>Vorhersagen <span class="cnt" id="pred-count"></span></h2>
       <button class="btn" id="pred-toggle">Alle anzeigen</button>
     </div>
@@ -64,7 +74,7 @@
 
   <div class="card">
     <div class="toolbar">
-      <h2>Beobachtungen (echte Messwerte) <span class="cnt" id="obs-count"></span></h2>
+      <h2>Beobachtungen (echte Messwerte) <span class="cnt" id="obs-count"></span><span class="hint">Pro Stunden-Lauf kommt genau 1 Messwert dazu (nicht 1 pro Vorhersage) — deshalb wächst diese Zahl viel langsamer als die Vorhersagen-Tabelle.</span></h2>
     </div>
     <div class="tablewrap"><div id="obs-table" class="loading">Lädt …</div></div>
   </div>
@@ -93,6 +103,78 @@ function fmtTime(iso){
   const d = new Date(iso);
   if(isNaN(d)) return iso;
   return d.toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+
+// Rundet einen Beobachtungs-Zeitstempel auf die volle Stunde ab (DWD-Messungen fallen z.B. auf
+// :00 oder :30) und bringt ihn ins selbe Format wie target_time in den Vorhersage-Zeilen
+// ("YYYY-MM-DDTHH:mmZ"), damit beide über einen simplen String-Key zusammengeführt werden können.
+function floorHourKey(iso){
+  const d = new Date(iso);
+  d.setUTCMinutes(0,0,0);
+  return d.toISOString().slice(0,16)+'Z';
+}
+
+// Führt Vorhersage- und Beobachtungs-Zeilen zusammen: für jede Beobachtung werden alle
+// Vorhersagen gesucht, deren Ziel-Zeitpunkt auf dieselbe volle Stunde fällt (unabhängig davon,
+// wie lange vorher sie gemacht wurden). Ein Treffer erscheint erst, sobald die Zielstunde einer
+// Vorhersage tatsächlich vergangen und gemessen wurde — bei langen Vorlaufzeiten (Tage) dauert
+// das entsprechend lange.
+function buildComparisons(predRows, obsRows){
+  const byTarget = new Map();
+  for(const p of predRows){
+    if(!byTarget.has(p.target_time)) byTarget.set(p.target_time, []);
+    byTarget.get(p.target_time).push(p);
+  }
+  const rows = [];
+  for(const o of obsRows){
+    const key = floorHourKey(o.time);
+    const matches = byTarget.get(key) || [];
+    for(const p of matches){
+      rows.push({
+        target_time: key,
+        obs_time: o.time,
+        model: p.model,
+        lead_h: p.lead_h,
+        issued_at: p.issued_at,
+        pred_temp: p.temp,
+        pred_precip: p.precip_prob,
+        obs_temp: o.temp,
+        obs_precip_mm: o.precip_mm,
+        diff: (p.temp!=null && o.temp!=null) ? p.temp - o.temp : null,
+      });
+    }
+  }
+  rows.sort((a,b)=> b.target_time.localeCompare(a.target_time) || a.lead_h-b.lead_h || a.model.localeCompare(b.model));
+  return rows;
+}
+
+function diffColor(diff){
+  if(diff==null) return 'var(--text-dim)';
+  const a = Math.abs(diff);
+  if(a<=1) return 'var(--green)';
+  if(a<=3) return 'var(--accent)';
+  return 'var(--red)';
+}
+
+function renderComparisons(rows){
+  const el = document.getElementById('compare-table');
+  if(!rows.length){
+    el.innerHTML = '<div class="empty">Noch keine Treffer. Ein Vergleich erscheint erst, sobald der Ziel-Zeitpunkt einer Vorhersage wirklich eingetreten ist — bei kurzen Vorlaufzeiten (0h/6h) geht das schnell, bei langen (bis 7 Tage) dauert es entsprechend.</div>';
+    return;
+  }
+  el.innerHTML = `<table><thead><tr>
+    <th>Ziel-Zeitpunkt</th><th>Modell</th><th>Vorlauf</th><th>Vorhergesagt</th><th>Tatsächlich</th><th>Abweichung</th><th>Regen vorh.</th><th>Regen real</th>
+  </tr></thead><tbody>${rows.map(r=>`
+    <tr>
+      <td>${fmtTime(r.target_time)}</td>
+      <td><span class="model-badge" style="background:${hexToRgba(MODEL_HEX[r.model]||'#8ba0b8',.18)};color:${MODEL_HEX[r.model]||'#e8edf4'}">${MODEL_LBL[r.model]||r.model}</span></td>
+      <td class="lead">+${r.lead_h}h</td>
+      <td>${r.pred_temp!=null?r.pred_temp.toFixed(1)+'°C':'–'}</td>
+      <td>${r.obs_temp!=null?r.obs_temp.toFixed(1)+'°C':'–'}</td>
+      <td class="diff" style="color:${diffColor(r.diff)}">${r.diff!=null?(r.diff>0?'+':'')+r.diff.toFixed(1)+'°C':'–'}</td>
+      <td>${r.pred_precip!=null?r.pred_precip+'%':'–'}</td>
+      <td>${r.obs_precip_mm!=null?(r.obs_precip_mm>0?`<span class="rain-yes">☔ ${r.obs_precip_mm}mm</span>`:'trocken'):'–'}</td>
+    </tr>`).join('')}</tbody></table>`;
 }
 
 function renderPredictions(rows, showAll){
@@ -155,12 +237,14 @@ async function main(){
     ]);
     allPredRows = predRows;
     renderStats(predRows, obsRows);
+    renderComparisons(buildComparisons(predRows, obsRows));
     renderPredictions(predRows, showAllPred);
     renderObservations(obsRows);
     document.getElementById('pred-count').textContent = `(${predRows.length} gesamt)`;
     document.getElementById('obs-count').textContent = `(${obsRows.length} gesamt, letzte ${Math.min(obsRows.length,RECENT_OBS)} gezeigt)`;
   }catch(e){
-    document.getElementById('pred-table').innerHTML = `<div class="err">Fehler beim Laden: ${e.message}</div>`;
+    document.getElementById('compare-table').innerHTML = `<div class="err">Fehler beim Laden: ${e.message}</div>`;
+    document.getElementById('pred-table').innerHTML = '';
     document.getElementById('obs-table').innerHTML = '';
     document.getElementById('stats').innerHTML = '';
   }
