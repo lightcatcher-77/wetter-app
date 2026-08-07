@@ -8,7 +8,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const FUSSEN = { lat: 47.5676, lon: 10.7012 };
-const MODELS = ['icon_seamless', 'ecmwf_ifs025', 'ecmwf_ifs', 'gfs_seamless', 'meteofrance_seamless'];
+const MODELS = ['icon_seamless', 'meteoswiss_icon_ch1', 'ecmwf_ifs', 'gfs_seamless', 'meteofrance_seamless'];
 const LEAD_HOURS = [0, 6, 24, 48, 72, 96, 120, 144, 168]; // 0h bis 7 Tage, ab Tag 3 im Tagesabstand
 
 const PRED_FILE = fileURLToPath(new URL('../backtest-data/predictions.jsonl', import.meta.url));
