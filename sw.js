@@ -4,7 +4,10 @@
 // Wichtig: GitHub Pages liefert index.html mit "Cache-Control: max-age=600" —
 // ohne {cache:'no-store'} würde fetch() hier den 10-Minuten-Browser-Cache
 // treffen und ein Update erst nach Ablauf dieser Frist zeigen.
-const CACHE = 'wetter-app-v3';
+// backtest-data/*.jsonl wächst stündlich und muss deshalb wie index.html
+// network-first geladen werden — sonst friert der Service Worker den ersten
+// je gesehenen Stand für immer ein (siehe Backtest-Beobachtungen-Bug).
+const CACHE = 'wetter-app-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -38,7 +41,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin || e.request.method !== 'GET') return;
 
-  if (e.request.mode === 'navigate' || url.pathname.endsWith('/index.html')) {
+  if (e.request.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname.includes('/backtest-data/')) {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' }).then(r => {
         const copy = r.clone();
