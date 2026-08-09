@@ -256,7 +256,6 @@
       </div>
     </div>
     <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
-    <div class="radar-incoming" id="radar-incoming" style="display:none"></div>
   </div>
   <div id="content-bottom"></div>
   <div id="check-result" style="text-align:center;padding:0 0 8px"></div>
@@ -461,7 +460,6 @@ function render(data){
   // angezeigten "Jetzt"-Stunde, unabhängig davon ob/wann das Radar fertig geladen ist.
   const _nowHourISO=nowHourISOAt(m&&m.utcOffset);
   lastHourlyNow=(data.hourly24||[]).find(c=>c.iso.slice(0,13)>=_nowHourISO)||null;
-  radarCheckIncoming();
   // Client-side filter: immer ab heute (Ortszeit), max 7 Tage — funktioniert auch wenn Daten 1-2 Tage alt sind
   const _p=locParts(m&&m.utcOffset);
   const _todayMid=new Date(_p.y,_p.mo-1,_p.d);
@@ -497,6 +495,7 @@ function render(data){
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
         <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
+        <div class="radar-incoming" id="radar-incoming" style="display:none"></div>
       </div>
       <div class="hero-stats">
         <div class="stat-box"><div class="sv">💨 ${cur.wind}</div><div class="sl">km/h ${cur.windDir}</div></div>
@@ -562,6 +561,9 @@ function render(data){
 
   document.getElementById('content-top').innerHTML=htmlTop;
   document.getElementById('content-bottom').innerHTML=htmlBottom;
+  // Erst jetzt (nach dem DOM-Ersatz) auslösen — #radar-incoming lebt seit dem Umzug in die
+  // Hero-Karte im dynamisch neu gebauten htmlTop und existiert vor dieser Zeile noch nicht.
+  radarCheckIncoming();
   setTimeout(()=>{
     if(mySeq!==renderSeq)return; // neuerer render()-Aufruf ist bereits unterwegs/fertig
     const ctx=document.getElementById('tempChart');
@@ -938,7 +940,9 @@ function reconcileCode(code,rainPct){
 // Wandelt die Open-Meteo-Antworten in das Anzeigeformat um.
 // raw = best_match-Abruf (alle Variablen), rawM = Multi-Modell-Abruf (optional),
 // ensRain = Stunden-Regenwahrscheinlichkeit aus dem ICON-EPS-Ensemble (optional).
-function buildWeatherData(raw, rawM, ensRain, satClear, bs){
+function buildWeatherData(raw, rawM, ensRain, satSky, bs){
+  const satClear = satSky && satSky.clear;
+  const satCloudy = satSky && satSky.cloudy;
   const cur = raw.current;
   const sunrise = raw.daily.sunrise[0].slice(11,16);
   const sunset = raw.daily.sunset[0].slice(11,16);
@@ -975,6 +979,13 @@ function buildWeatherData(raw, rawM, ensRain, satClear, bs){
     const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
     if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
   }
+  // Wolkenradar-Override (Gegenrichtung): Station/Modell melden klar (0/1), aber der Satellit
+  // zeigt eindeutig einen kalten/hohen Wolkenschirm über dem exakten Standort. Die Station kann
+  // mehrere km entfernt liegen (siehe station.distanceKm) und dort lokal anders liegen — der
+  // Satellit ist am exakten Punkt verlässlicher. "Bedeckt" (3) statt z.B. "wechselnd bewölkt",
+  // da sich Bewölkungsgrad aus einem Graustufen-Pixel nicht feiner unterscheiden lässt — derselbe
+  // generische Cloudy-Fallback-Code wie in reconcileCode() weiter unten.
+  if (satCloudy && (nowCode===0 || nowCode===1)) nowCode = 3;
   const [icoRaw,cond] = wmoIcon(nowCode);
   // Nachts nie ein Sonnen-Icon zeigen, auch bei klarem/leicht bewölktem Himmel — dann Mond statt Sonne.
   const toMin=s=>{const[h,m]=s.split(':').map(Number);return h*60+m;};
@@ -1322,7 +1333,7 @@ function refreshRainDisplay(){
 function initRadar(){
   if(typeof L==='undefined'||radarMap)return;
   radarMap=L.map('radar-map',{attributionControl:true,zoomControl:true,scrollWheelZoom:false})
-    .setView([FALLBACK.lat,FALLBACK.lon],7);
+    .setView([FALLBACK.lat,FALLBACK.lon],9);
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',{
     subdomains:'abcd',maxZoom:19,zIndex:1,attribution:'© OpenStreetMap, © CARTO'
   }).addTo(radarMap);
@@ -1346,7 +1357,7 @@ function initRadar(){
 }
 function radarSetCenter(lat,lon){
   if(!radarMap)return;
-  radarMap.setView([lat,lon],radarMap.getZoom()||7);
+  radarMap.setView([lat,lon],radarMap.getZoom()||9);
   if(radarMarker)radarMarker.setLatLng([lat,lon]);
   radarLoc={lat,lon};
   refreshRainDisplay();
@@ -1409,6 +1420,37 @@ function radarClassifyFrameAtLoc(frameIdx,loc){
     img.src=url;
   });
 }
+// Analog zu dwdClassifyAreaAtTime, aber für den RainViewer-Fallback außerhalb Deutschlands
+// (radarCheckIncoming): sampelt einen kleinen Block um den Standort statt eines Einzelpixels
+// und verlangt via largestConnectedCluster dieselbe Cluster-Logik — gleiches Rauschfilter-
+// Prinzip, nur an die gröbere Zoom-7-Pixelauflösung (~1.2km/Pixel) angepasst.
+const RV_CLUSTER_MIN_PX=2;
+function radarClassifyAreaAtLoc(frameIdx,loc){
+  return new Promise(resolve=>{
+    const frame=radarFrames[frameIdx];
+    if(!loc||!frame||!radarHost){resolve(false);return;}
+    const z=7;
+    const{tx,ty,px,py}=radarTileCoords(loc.lat,loc.lon,z);
+    const url=`${radarHost}${frame.path}/256/${z}/${tx}/${ty}/2/1_1.png`;
+    const img=new Image();
+    img.crossOrigin='anonymous';
+    img.onload=()=>{
+      try{
+        const canvas=document.createElement('canvas');
+        canvas.width=256;canvas.height=256;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(img,0,0);
+        const half=4;
+        const x0=Math.max(0,px-half), y0=Math.max(0,py-half);
+        const x1=Math.min(255,px+half), y1=Math.min(255,py+half);
+        const d=ctx.getImageData(x0,y0,x1-x0+1,y1-y0+1).data;
+        resolve(largestConnectedCluster(d,x1-x0+1,y1-y0+1,25)>=RV_CLUSTER_MIN_PX);
+      }catch(e){resolve(false);}
+    };
+    img.onerror=()=>resolve(false);
+    img.src=url;
+  });
+}
 // Eng um den Punkt geschnittene Bbox fürs GetFeatureInfo unten — bewusst viel kleiner als
 // dwdBbox() (die deckt ~8-10km für die Umkreis-Vorwarnung ab). Bei 3x3 Pixeln über ~1.5-2km
 // Kantenlänge liegt die Mitte (x=1,y=1) nah am nativen 1km-Raster des DWD-Produkts; mit der
@@ -1464,6 +1506,40 @@ function dwdBbox(loc){
   const dLat=0.05, dLon=0.08;
   return `${loc.lon-dLon},${loc.lat-dLat},${loc.lon+dLon},${loc.lat+dLat}`;
 }
+// 4-Nachbarschafts-Flood-Fill über die Alpha-Maske: liefert die Größe der größten zusammen-
+// hängenden Fläche mit alpha>alphaThresh. Für die Vorwarnung reicht nicht irgendein einzelner
+// Regen-Pixel (Rauschen/eine isolierte 1km-Radarzelle) — erst ein zusammenhängend größeres
+// Feld soll anschlagen. Wiederverwendet von DWD- und RainViewer-Pfad (unterschiedliche
+// Pixelauflösung, deshalb pro Aufrufer ein eigener Mindestgrößen-Schwellwert).
+function largestConnectedCluster(data,w,h,alphaThresh){
+  const n=w*h;
+  const mask=new Uint8Array(n);
+  for(let i=0;i<n;i++) mask[i]=data[i*4+3]>alphaThresh?1:0;
+  const visited=new Uint8Array(n);
+  let best=0,stack=[];
+  for(let start=0;start<n;start++){
+    if(!mask[start]||visited[start])continue;
+    let size=0;
+    stack.length=0;
+    stack.push(start);
+    visited[start]=1;
+    while(stack.length){
+      const idx=stack.pop();
+      size++;
+      const x=idx%w, y=(idx/w)|0;
+      if(x>0&&mask[idx-1]&&!visited[idx-1]){visited[idx-1]=1;stack.push(idx-1);}
+      if(x<w-1&&mask[idx+1]&&!visited[idx+1]){visited[idx+1]=1;stack.push(idx+1);}
+      if(y>0&&mask[idx-w]&&!visited[idx-w]){visited[idx-w]=1;stack.push(idx-w);}
+      if(y<h-1&&mask[idx+w]&&!visited[idx+w]){visited[idx+w]=1;stack.push(idx+w);}
+    }
+    if(size>best)best=size;
+  }
+  return best;
+}
+// Mindestgröße der zusammenhängenden Fläche im 50×50-Sample (~11×11km Bbox, ~0.22km/Pixel) —
+// deckt mehr als eine isolierte 1km-DWD-Zelle ab, ohne echte kleine Schauerzellen komplett
+// rauszufiltern.
+const DWD_CLUSTER_MIN_PX=10;
 function dwdClassifyAreaAtTime(loc,isoTime){
   return new Promise(resolve=>{
     const url='https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.1.1&request=GetMap'+
@@ -1478,9 +1554,7 @@ function dwdClassifyAreaAtTime(loc,isoTime){
         const ctx=canvas.getContext('2d');
         ctx.drawImage(img,0,0);
         const d=ctx.getImageData(0,0,50,50).data;
-        let rain=false;
-        for(let i=3;i<d.length;i+=4){ if(d[i]>25){rain=true;break;} }
-        resolve(rain);
+        resolve(largestConnectedCluster(d,50,50,25)>=DWD_CLUSTER_MIN_PX);
       }catch(e){resolve(false);}
     };
     img.onerror=()=>resolve(false);
@@ -1523,8 +1597,8 @@ async function radarCheckIncoming(){
       const stepMin=radarFrameStepMin();
       const nowcastIdxs=[];
       for(let i=radarPastLen;i<radarFrames.length;i++) nowcastIdxs.push(i);
-      const results=await Promise.all(nowcastIdxs.map(i=>radarClassifyFrameAtLoc(i,loc)));
-      results.forEach((info,idx)=>{ if(info&&firstIncomingMin==null) firstIncomingMin=(idx+1)*stepMin; });
+      const results=await Promise.all(nowcastIdxs.map(i=>radarClassifyAreaAtLoc(i,loc)));
+      results.forEach((rain,idx)=>{ if(rain&&firstIncomingMin==null) firstIncomingMin=(idx+1)*stepMin; });
     }
   }
   if(seq!==radarIncomingSeq)return;
@@ -1648,9 +1722,17 @@ function radarRenderFrame(i){
   badge.textContent=isForecast?'PROGNOSE':'LIVE';
   badge.classList.toggle('forecast',isForecast);
 }
+// Debounced statt bei jedem oninput-Zwischenwert sofort ein WMS/Tile-Reload anzustoßen: beim
+// Ziehen des Sliders feuert oninput sehr häufig, und jeder Aufruf löst in radarRenderFrame ein
+// komplettes Tile-Redraw aus. Überlappen sich mehrere davon (Redraw entfernt alte Tiles, bevor
+// die neuen fertig geladen sind), verschwinden Regenfelder kurzzeitig — genau das gemeldete
+// Verhalten beim schnellen Scrubben. Nur der jeweils letzte Wert nach einer kurzen Pause löst
+// das eigentliche Rendering aus; das ist visuell nicht spürbar, verhindert aber die Überlappung.
+let radarSeekTimer=null;
 function radarSeek(i){
   radarIndex=+i;
-  radarRenderFrame(radarIndex);
+  clearTimeout(radarSeekTimer);
+  radarSeekTimer=setTimeout(()=>radarRenderFrame(radarIndex),90);
 }
 function radarTogglePlay(){
   const btn=document.getElementById('radar-play');
@@ -1734,7 +1816,14 @@ function prefetchSatNow(){
 // Deutlich niedriger angesetzt, auch auf Kosten dafür, dass echtes Klarwetter an kühleren
 // Tagen (niedrigere Bodentemperatur → niedrigerer Grauwert) seltener erkannt wird.
 const SAT_CLEAR_LUM_MAX=20;
-function sampleSatelliteClear(lat,lon){
+// Zweiter, deutlich höherer Schwellwert für die Gegenrichtung (Station meldet klar, Satellit
+// zeigt aber Wolken): nur ein eindeutig erkennbarer kalter/hoher Wolkenschirm soll die Station
+// überstimmen. Dazwischen (20-55) bleibt bewusst unentschieden — weder clear noch cloudy greift,
+// um nicht bei jeder Grauzonen-Messung hin- und herzuspringen.
+const SAT_CLOUDY_LUM_MIN=55;
+// Liefert {clear, cloudy}: clear=true nur unter SAT_CLEAR_LUM_MAX, cloudy=true nur ab
+// SAT_CLOUDY_LUM_MIN, sonst jeweils false; bei Sample-Fehler beide null (unbekannt).
+function sampleSatelliteSky(lat,lon){
   return new Promise(resolve=>{
     const d=0.15;
     const bbox=`${lon-d},${lat-d},${lon+d},${lat+d}`;
@@ -1749,10 +1838,10 @@ function sampleSatelliteClear(lat,lon){
         ctx.drawImage(img,0,0);
         const px=ctx.getImageData(8,8,1,1).data;
         const lum=0.299*px[0]+0.587*px[1]+0.114*px[2];
-        resolve(lum<SAT_CLEAR_LUM_MAX);
-      }catch(e){resolve(null);}
+        resolve({clear:lum<SAT_CLEAR_LUM_MAX, cloudy:lum>=SAT_CLOUDY_LUM_MIN});
+      }catch(e){resolve({clear:null,cloudy:null});}
     };
-    img.onerror=()=>resolve(null);
+    img.onerror=()=>resolve({clear:null,cloudy:null});
     img.src=url;
   });
 }
@@ -1980,18 +2069,18 @@ async function loadAll(){
       lat=pos?pos.lat:FALLBACK.lat;lon=pos?pos.lon:FALLBACK.lon;
     }
     setBadge('Wetterdaten werden geladen…');
-    const [main,models,ens,place,warns,satClear,dav,brightSky]=await Promise.all([
+    const [main,models,ens,place,warns,satSky,dav,brightSky]=await Promise.all([
       fetch(mainUrl(lat,lon)).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
       fetch(modelsUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(ensembleUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
       (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null),
       fetchWarnings(lat,lon),
-      sampleSatelliteClear(lat,lon),
+      sampleSatelliteSky(lat,lon),
       inDavRegion(lat,lon)?fetchDAV():Promise.resolve(null),
       isGermany(lat,lon)?fetch(brightSkyUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)
     ]);
     if(!main.current||!main.hourly||!main.daily) throw new Error('Unerwartetes Antwortformat');
-    const data=buildWeatherData(main,models,buildEnsRain(ens),satClear,brightSky);
+    const data=buildWeatherData(main,models,buildEnsRain(ens),satSky,brightSky);
     data.dav=dav;
     if(warns&&warns.length){
       const top=warns.find(w=>w.severity==='danger')||warns[0];
