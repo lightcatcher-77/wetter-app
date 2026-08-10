@@ -67,7 +67,10 @@
     .leaflet-control-attribution{background:rgba(10,20,30,.55) !important;color:var(--text-dim) !important;font-size:9px !important;}
     .leaflet-control-attribution a{color:var(--text-dim) !important;}
     .leaflet-control-zoom a{background:var(--card) !important;color:var(--text) !important;border-color:var(--border) !important;}
-    .radar-time-big{text-align:center;font-size:16px;font-weight:700;color:var(--accent);margin-top:12px;letter-spacing:.2px;}
+    .radar-time-big{text-align:center;font-size:16px;font-weight:700;color:var(--accent);margin-top:12px;letter-spacing:.2px;transition:opacity .15s;}
+    /* Der Zeitpunkt steht sofort da, das Bild dazu kann noch laden — die gedimmte Beschriftung
+       zeigt das an, ohne dass die Karte dafür leergeräumt werden müsste. */
+    .radar-time-big.loading{opacity:.45;}
     .radar-controls{display:flex;align-items:flex-start;gap:10px;margin-top:6px;}
     .radar-btn{flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
     .radar-slider-wrap{position:relative;flex:1;padding-bottom:16px;padding-top:5px;}
@@ -1279,7 +1282,9 @@ function renderDavCard(dav){
 // großzügig, Ungenauigkeit an der Grenze ist unkritisch (DWD liefert dort einfach
 // leere/transparente Bilder statt eines Fehlers).
 function inGermany(lat,lon){ return lat>=47.2&&lat<=55.1&&lon>=5.8&&lon<=15.1; }
-let radarMap=null, radarLayer=null, radarMarker=null;
+let radarMap=null, radarMarker=null;
+let radarCanvas=null;     // Canvas-Overlay für die Einzelbild-Quellen (DWD-Regen, Satellit)
+let radarTiles=null;      // Kachel-Layer für den RainViewer-Fallback außerhalb Deutschlands
 let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Kartenbereich aktiv ist
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
 let satFrames=[]; // {time} — synthetisiert, RainViewer liefert hierfür keine Frame-Liste
@@ -1315,33 +1320,285 @@ function buildDwdFrames(){
 }
 // Baut die sichtbare Kartenanzeige für den Regen-Tab neu auf: DWD für deutsche Standorte
 // (sofort, kein Netzwerk-Roundtrip nötig — nur die Zeitachse wird neu berechnet), sonst
-// unverändert RainViewer via fetchRadarFrames(). Wird bei Standort- und Tab-Wechsel gerufen.
+// RainViewer aus den bereits geholten Frames. Wird bei Standort- und Tab-Wechsel gerufen.
+// Der RainViewer-Zweig ist wichtig beim Wechsel von einem deutschen auf einen ausländischen
+// Standort: ohne ihn bliebe das DWD-Bild (Deutschland) über dem neuen Ort liegen.
 function refreshRainDisplay(){
   if(radarMode!=='rain'||!radarMap||!radarLoc)return;
-  if(radarUsingDwdForLoc()){
-    buildDwdFrames();
-    radarIndex=dwdPastLen-1;
-    const slider=document.getElementById('radar-slider');
-    slider.max=dwdFrames.length-1;
-    slider.value=radarIndex;
-    radarBuildTicks();
-    radarRenderFrame(radarIndex);
-    document.getElementById('radar-note').textContent='Deutsches Radarkomposit (DWD, 1 km, 5-Min-Raster) inkl. echter 2-Std.-Kurzfristprognose (RADVOR).';
-    prefetchDwdFrames();
+  if(!radarUsingDwdForLoc()){
+    if(radarFrames.length&&radarHost)showRainViewerDisplay();
+    return;
+  }
+  buildDwdFrames();
+  if(!radarViewCovers())radarNewView();
+  radarIndex=dwdPastLen-1;
+  const slider=document.getElementById('radar-slider');
+  slider.max=dwdFrames.length-1;
+  slider.value=radarIndex;
+  radarBuildTicks();
+  radarRenderFrame(radarIndex);
+  document.getElementById('radar-note').textContent='Deutsches Radarkomposit (DWD, 1 km, 5-Min-Raster) inkl. echter 2-Std.-Kurzfristprognose (RADVOR).';
+  radarPrefetchFrames();
+}
+
+// ── Frame-Engine: Bilder im Speicher halten statt sie neu zu laden ───────────
+// Warum das nötig ist: der DWD-WMS liefert seine GetMap-Antworten ohne Cache-Control,
+// ETag oder Last-Modified (per Live-Test bestätigt) — der Browser darf sie also gar nicht
+// wiederverwenden. Ein "Vorladen" per new Image() verpufft damit vollständig: jeder
+// Frame-Wechsel beim Scrubben stieß erneut ein serverseitiges Rendern von ~1-1,5 s an,
+// und genau das war als Hängen zu spüren. Deshalb hält die App die Frame-Bilder jetzt
+// selbst als Image-Objekte im Speicher und zeichnet sie synchron per drawImage auf ein
+// Canvas-Overlay: ein bereits geladener Frame erscheint ohne Netzwerk, ohne Flackern und
+// ohne Leerframe im selben Repaint wie die Slider-Bewegung.
+const RADAR_VIEW_PAD=0.15;   // Rand um den sichtbaren Ausschnitt — kleine Pans ohne Neuladen
+const RADAR_MAX_PX=560;      // Deckel für die angeforderte Bildkantenlänge
+const RADAR_PARALLEL=6;      // gleichzeitige Bild-Requests (GeoServer rendert live, nicht fluten)
+let radarView=null;          // {bbox,w,h,bounds,zoom,sx,sy} — Ausschnitt, für den neu geladen wird
+let radarCanvasView=null;    // Ausschnitt des gerade gezeichneten Bildes
+const radarImgCache=new Map(); // url -> {url,view,state,img,prio,cbs}
+const radarQueue=[], radarInflight=new Set();
+let radarLoading=0, radarWantedUrl=null, radarWantTimer=null, radarViewTimer=null;
+
+// Gepolsterte, auf ein grobes Raster gerundete Bbox: kleine Kartenverschiebungen ergeben
+// dieselbe Bbox und damit dieselben URLs — der geladene Bildvorrat bleibt gültig, statt beim
+// kleinsten Pan komplett zu verfallen. Die Bildkante wird gedeckelt; das Radarprodukt löst
+// ohnehin nur 1 km auf, ein größeres Bild kostet nur Renderzeit beim Server.
+function radarComputeView(){
+  const b=radarMap.getBounds(), s=radarMap.getSize();
+  const latSpan=Math.max(b.getNorth()-b.getSouth(),1e-4);
+  const lonSpan=Math.max(b.getEast()-b.getWest(),1e-4);
+  const gLat=latSpan/10, gLon=lonSpan/10, r=v=>Math.round(v*1e5)/1e5;
+  const south=r(Math.floor((b.getSouth()-latSpan*RADAR_VIEW_PAD)/gLat)*gLat);
+  const north=r(Math.ceil ((b.getNorth()+latSpan*RADAR_VIEW_PAD)/gLat)*gLat);
+  const west =r(Math.floor((b.getWest() -lonSpan*RADAR_VIEW_PAD)/gLon)*gLon);
+  const east =r(Math.ceil ((b.getEast() +lonSpan*RADAR_VIEW_PAD)/gLon)*gLon);
+  let w=Math.round(s.x*(east-west)/lonSpan), h=Math.round(s.y*(north-south)/latSpan);
+  const scale=Math.min(1,RADAR_MAX_PX/Math.max(w,h,1));
+  w=Math.max(64,Math.round(w*scale));
+  h=Math.max(64,Math.round(h*scale));
+  return {bbox:`${west},${south},${east},${north}`,w,h,zoom:radarMap.getZoom(),sx:s.x,sy:s.y,
+          bounds:L.latLngBounds([south,west],[north,east])};
+}
+function radarEnsureView(){
+  if(!radarView&&radarMap)radarView=radarComputeView();
+  return radarView;
+}
+// Deckt der geladene Vorrat den sichtbaren Ausschnitt noch ab?
+function radarViewCovers(){
+  if(!radarView||!radarMap)return false;
+  const s=radarMap.getSize();
+  return radarView.zoom===radarMap.getZoom()&&radarView.sx===s.x&&radarView.sy===s.y
+    &&radarView.bounds.contains(radarMap.getBounds());
+}
+function radarNewView(){
+  if(!radarMap)return;
+  radarView=radarComputeView();
+  radarImgCache.clear();
+  radarQueue.length=0;
+  // Laufende Anfragen für den alten Ausschnitt abbrechen — ihre Bilder passen nicht mehr und
+  // würden sonst die Slots für den neuen Ausschnitt blockieren.
+  for(const e of[...radarInflight])radarAbort(e,false);
+}
+
+function radarImgEntry(url){
+  let e=radarImgCache.get(url);
+  if(!e){e={url,view:radarView,state:'idle',img:null,prio:99,cbs:[],keep:true};radarImgCache.set(url,e);}
+  return e;
+}
+// prio 0 = der Frame, den der Nutzer gerade sehen will; größer = Hintergrund-Vorrat.
+// keep=false für RainViewer-Kacheln: die sind regulär cachebar, da genügt der Browser-Cache
+// und das decodierte Bild muss nicht zusätzlich im Speicher gehalten werden.
+function radarImgLoad(url,prio,cb,keep){
+  const e=radarImgEntry(url);
+  if(keep===false)e.keep=false;
+  if(e.state==='ok'){if(cb)cb(e);return e;}
+  if(e.state==='err'){
+    if(prio>0)return e;   // fehlgeschlagene Vorrats-Frames nicht endlos wiederholen
+    e.state='idle';
+  }
+  if(cb)e.cbs.push(cb);
+  if(prio<e.prio)e.prio=prio;
+  if(e.state==='idle'){e.state='queued';radarQueue.push(e);}
+  // Der Frame, den der Nutzer sehen will, wartet nicht hinter dem Vorrat: sind alle Slots
+  // mit Hintergrund-Ladevorgängen belegt, wird der unwichtigste davon abgebrochen und später
+  // neu eingereiht. Ohne das kostet ein Sprung auf einen noch nicht geladenen Frame beim
+  // kalten Start bis zu einer kompletten zusätzlichen Serverantwort extra.
+  if(prio===0&&e.state==='queued'&&radarLoading>=RADAR_PARALLEL)radarAbortLowest();
+  radarPump();
+  return e;
+}
+function radarAbort(e,requeue){
+  const img=e._img;
+  if(img){img.onload=img.onerror=null;img.src='';}   // bricht die laufende Anfrage ab
+  radarInflight.delete(e);
+  radarLoading--;
+  e._img=null;
+  if(requeue){
+    e.state='queued';
+    e.prio=Math.max(e.prio,50);                      // hinten wieder einreihen, Callbacks bleiben
+    radarQueue.push(e);
+  }else{
+    e.state='idle';e.cbs=[];
   }
 }
-// Lädt alle DWD-Frame-Bilder im Hintergrund vor (analog fetchSatFrames), damit spätere
-// setUrl()-Aufrufe beim Scrubben aus dem Browser-Cache statt live vom DWD-Server kommen.
-// Reihenfolge von "Jetzt" aus nach außen alternierend statt chronologisch — die Frames, die
-// beim Scrubben typischerweise zuerst erreicht werden, sind so am ehesten schon gecacht.
-function prefetchDwdFrames(){
-  if(!dwdFrames.length)return;
-  const center=dwdPastLen-1, order=[center];
-  for(let d=1; center-d>=0 || center+d<dwdFrames.length; d++){
-    if(center-d>=0) order.push(center-d);
-    if(center+d<dwdFrames.length) order.push(center+d);
+function radarAbortLowest(){
+  let worst=null;
+  for(const e of radarInflight)if(e.prio>0&&(!worst||e.prio>worst.prio))worst=e;
+  if(worst)radarAbort(worst,true);
+}
+function radarPump(){
+  while(radarLoading<RADAR_PARALLEL&&radarQueue.length){
+    radarQueue.sort((a,b)=>a.prio-b.prio);
+    const e=radarQueue.shift();
+    e.state='loading';radarLoading++;radarInflight.add(e);
+    const img=e._img=new Image();
+    const done=()=>{radarInflight.delete(e);e._img=null;radarLoading--;};
+    img.onload=()=>{
+      done();
+      e.state='ok';e.img=e.keep?img:null;
+      const cbs=e.cbs;e.cbs=[];
+      cbs.forEach(f=>f(e));
+      radarPump();
+    };
+    img.onerror=()=>{done();e.state='err';e.cbs=[];radarPump();};
+    img.src=e.url;
   }
-  order.forEach(i=>{ new Image().src=dwdOverlayUrl(dwdFrames[i].iso); });
+}
+// Wartende Vorrats-Requests nach Abstand zum angezeigten Frame neu einsortieren: was beim
+// Weiterscrubben als Nächstes erreicht wird, kommt vor dem Rest an die Reihe.
+function radarPrioritize(center){
+  const f=activeFrames();
+  for(let i=0;i<f.length;i++){
+    const e=radarImgCache.get(radarOverlayUrl(f[i]));
+    if(e&&e.state==='queued')e.prio=Math.min(e.prio,1+Math.abs(i-center));
+  }
+}
+// Trifft die Anzeige auf eine Einzelbild-Quelle (DWD-Regen oder Satellit) oder auf die
+// RainViewer-Kacheln?
+function radarOverlayMode(){ return radarMode==='sat'||radarUsingDwdForLoc(); }
+function radarFrameIso(frame){
+  return frame.iso||new Date(frame.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
+}
+function radarOverlayUrl(frame){
+  const iso=radarFrameIso(frame);
+  return radarMode==='sat'?satOverlayUrl(iso):dwdOverlayUrl(iso);
+}
+function radarPrefetchFrames(){
+  if(!radarMap||!radarOverlayMode()||!radarEnsureView())return;
+  const f=activeFrames();
+  const center=Math.min(Math.max(radarIndex,0),Math.max(f.length-1,0));
+  f.forEach((fr,i)=>radarImgLoad(radarOverlayUrl(fr),1+Math.abs(i-center)));
+}
+// RainViewer-Fallback: Kacheln kommen von einem CDN und sind — anders als der DWD-WMS —
+// regulär cachebar. Hier reicht es, die sichtbaren Kacheln aller Frames einmal anzufordern,
+// damit der Layerwechsel beim Scrubben aus dem Browser-Cache bedient wird.
+function radarPrefetchTiles(){
+  if(!radarMap||!radarHost||!radarFrames.length)return;
+  // Der Kachel-Pfad legt nur Buchführungs-Einträge an (keep:false, kein Bild im Speicher) —
+  // bei ausgiebigem Pannen/Zoomen sammeln die sich sonst unbegrenzt an.
+  if(radarImgCache.size>600)
+    for(const[k,e]of radarImgCache)if(!e.keep&&(e.state==='ok'||e.state==='err'))radarImgCache.delete(k);
+  const z=Math.min(radarMap.getZoom(),12), b=radarMap.getBounds();
+  const nw=radarTileCoords(b.getNorth(),b.getWest(),z), se=radarTileCoords(b.getSouth(),b.getEast(),z);
+  const center=radarPastLen-1;
+  radarFrames.forEach((fr,i)=>{
+    for(let x=nw.tx;x<=se.tx;x++)for(let y=nw.ty;y<=se.ty;y++)
+      radarImgLoad(`${radarHost}${fr.path}/256/${z}/${x}/${y}/2/1_1.png`,1+Math.abs(i-center),null,false);
+  });
+}
+
+// Wie L.imageOverlay, nur mit einem Canvas als Bildfläche: ein Framewechsel ist damit ein
+// synchrones drawImage aus dem Speicher statt eines img.src-Wechsels, der erst nach einem
+// Netzwerk-Roundtrip (und mit sichtbarem Leerframe dazwischen) ankommt. Positionierung,
+// Zoom-Animation und Bounds erledigt weiterhin Leaflet — überschrieben wird nur, woraus
+// die Bildfläche besteht. Lazy definiert, weil Leaflet fehlen kann (siehe initRadar).
+let RadarCanvasOverlay=null;
+function radarCanvasClass(){
+  if(RadarCanvasOverlay)return RadarCanvasOverlay;
+  RadarCanvasOverlay=L.ImageOverlay.extend({
+    _initImage:function(){
+      const c=this._image=document.createElement('canvas');
+      c.className='leaflet-image-layer'+(this._zoomAnimated?' leaflet-zoom-animated':'');
+      c.style.opacity=this.options.opacity;
+      c.onselectstart=()=>false;
+      c.onmousemove=()=>false;
+      if(this.options.zIndex)this._updateZIndex();
+    },
+    drawFrame:function(img){
+      const c=this._image;
+      if(!c||!img)return;
+      const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+      if(!w||!h)return;
+      if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
+      const ctx=c.getContext('2d');
+      ctx.clearRect(0,0,w,h);
+      ctx.drawImage(img,0,0);
+    }
+  });
+  return RadarCanvasOverlay;
+}
+function radarEnsureCanvas(opacity){
+  if(radarTiles){radarMap.removeLayer(radarTiles);radarTiles=null;}
+  if(!radarCanvas){
+    radarCanvas=new (radarCanvasClass())('',radarEnsureView().bounds,{opacity,zIndex:400});
+    radarCanvas.addTo(radarMap);
+    radarCanvasView=null;
+  }
+  if(radarCanvas.options.opacity!==opacity)radarCanvas.setOpacity(opacity);
+  return radarCanvas;
+}
+function radarSetLoading(on){
+  const el=document.getElementById('radar-time');
+  if(el)el.classList.toggle('loading',!!on);
+}
+// Die Bounds werden erst zusammen mit dem passenden Bild gesetzt: solange das Bild für einen
+// neuen Ausschnitt noch lädt, bleibt das alte an seiner echten geografischen Position stehen,
+// statt auf den neuen Ausschnitt verzerrt zu werden.
+function radarPaint(e){
+  radarSetLoading(false);
+  if(!radarCanvas||!e.img)return;
+  if(e.view&&radarCanvasView!==e.view){radarCanvas.setBounds(e.view.bounds);radarCanvasView=e.view;}
+  radarCanvas.drawFrame(e.img);
+}
+function radarShowOverlayFrame(i){
+  const frame=activeFrames()[i];
+  if(!frame)return;
+  radarEnsureView();
+  radarEnsureCanvas(radarMode==='sat'?.85:.75);
+  const url=radarOverlayUrl(frame);
+  radarWantedUrl=url;
+  const cached=radarImgCache.get(url);
+  if(cached&&cached.state==='ok'&&cached.img){radarPaint(cached);return;}
+  radarSetLoading(true);
+  // Beim Ziehen des Sliders nicht für jeden Zwischenwert einen WMS-Request auslösen: gecachte
+  // Frames sind oben schon synchron gezeichnet, ungecachte werden erst angefordert, wenn der
+  // Finger kurz stehen bleibt. Ohne das würde eine einzige Wischbewegung Dutzende Live-
+  // Renderings beim Server anstoßen, die sich gegenseitig ausbremsen. Die alte Anzeige bleibt
+  // solange stehen — nichts wird geleert, deshalb flackert auch nichts.
+  clearTimeout(radarWantTimer);
+  radarWantTimer=setTimeout(()=>{
+    if(radarWantedUrl!==url)return;
+    radarPrioritize(i);
+    radarImgLoad(url,0,e=>{ if(radarWantedUrl===e.url)radarPaint(e); });
+  },70);
+}
+function radarShowTileFrame(frame){
+  if(radarCanvas){radarMap.removeLayer(radarCanvas);radarCanvas=null;radarCanvasView=null;}
+  radarSetLoading(false);
+  const url=`${radarHost}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
+  if(radarTiles)radarTiles.setUrl(url);
+  else radarTiles=L.tileLayer(url,{opacity:.75,maxNativeZoom:12,zIndex:400}).addTo(radarMap);
+}
+// Nach Pan/Zoom: nur wenn der sichtbare Ausschnitt aus der vorgeladenen Bbox herausgelaufen
+// ist, wird ein neuer Vorrat aufgebaut. Innerhalb der Polsterung passiert gar nichts mehr —
+// vorher löste jede Kartenbewegung einen kompletten Neuabruf des angezeigten Frames aus.
+function radarViewChanged(){
+  if(!radarMap)return;
+  if(!radarOverlayMode()){radarPrefetchTiles();return;}
+  if(radarViewCovers())return;
+  radarNewView();
+  radarRenderFrame(radarIndex);
+  radarPrefetchFrames();
 }
 
 function initRadar(){
@@ -1358,13 +1615,12 @@ function initRadar(){
   }).addTo(radarMap);
   radarMarker=L.circleMarker([FALLBACK.lat,FALLBACK.lon],{radius:6,color:'#f5c842',weight:2,fillColor:'#f5c842',fillOpacity:.9,pane:'markerPane'}).addTo(radarMap);
   radarLoc={lat:FALLBACK.lat,lon:FALLBACK.lon};
-  // Satelliten- und DWD-Regenbild sind Einzelbild-Overlays (kein Kachelraster) — bei
-  // Verschieben/Zoomen müssen sie auf den neuen Kartenausschnitt neu zugeschnitten werden.
-  radarMap.on('moveend zoomend',()=>{
-    if(radarLayer&&radarLayer._iso&&(radarLayer._isSat||radarLayer._isDwd)){
-      radarLayer.setBounds(radarMap.getBounds());
-      radarLayer.setUrl(radarLayer._isSat?satOverlayUrl(radarLayer._iso):dwdOverlayUrl(radarLayer._iso));
-    }
+  // Satelliten- und DWD-Regenbild sind Einzelbild-Overlays (kein Kachelraster) — läuft die
+  // Karte aus dem vorgeladenen Ausschnitt heraus, muss der Bildvorrat neu aufgebaut werden.
+  // Entprellt, damit eine Wisch- oder Pinch-Geste das nicht mehrfach anstößt.
+  radarMap.on('moveend zoomend resize',()=>{
+    clearTimeout(radarViewTimer);
+    radarViewTimer=setTimeout(radarViewChanged,180);
   });
   fetchRadarFrames();
   refreshRainDisplay();
@@ -1642,25 +1898,29 @@ async function fetchRadarFrames(){
     // Sichtbare Kartenanzeige nur mit RainViewer bestücken, wenn der aktuelle Standort nicht
     // in Deutschland liegt — sonst würde dieser asynchrone Fetch die bereits (synchron in
     // radarSetCenter) gerenderte DWD-Karte überschreiben (Race Condition).
-    if(!radarUsingDwdForLoc()){
-      radarIndex=radarPastLen-1;
-      const slider=document.getElementById('radar-slider');
-      slider.max=radarFrames.length-1;
-      slider.value=radarIndex;
-      radarBuildTicks();
-      radarRenderFrame(radarIndex);
-      const futureSteps=radarFrames.length-radarPastLen;
-      const futureMin=futureSteps*radarFrameStepMin();
-      document.getElementById('radar-note').textContent=futureSteps>0
-        ? `Vergangene ~2 Std. + ${futureMin} Min. Kurzfrist-Prognose (RainViewer) — Prognose ist kein garantierter Teil der kostenlosen API, Verlässlichkeit nimmt Richtung Prognose-Ende ab.`
-        : 'Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.';
-    }
+    if(!radarUsingDwdForLoc())showRainViewerDisplay();
   }catch(e){
     if(!radarUsingDwdForLoc()){
       document.getElementById('radar-time').textContent='Radar nicht verfügbar';
       document.getElementById('radar-note').textContent='Radardaten konnten nicht geladen werden.';
     }
   }
+}
+// Zeitachse, Karte und Hinweistext auf die RainViewer-Frames stellen (Standorte außerhalb
+// Deutschlands). Aufgerufen nach dem Frame-Abruf und beim Standortwechsel weg aus Deutschland.
+function showRainViewerDisplay(){
+  radarIndex=radarPastLen-1;
+  const slider=document.getElementById('radar-slider');
+  slider.max=radarFrames.length-1;
+  slider.value=radarIndex;
+  radarBuildTicks();
+  radarRenderFrame(radarIndex);
+  radarPrefetchTiles();
+  const futureSteps=radarFrames.length-radarPastLen;
+  const futureMin=futureSteps*radarFrameStepMin();
+  document.getElementById('radar-note').textContent=futureSteps>0
+    ? `Vergangene ~2 Std. + ${futureMin} Min. Kurzfrist-Prognose (RainViewer) — Prognose ist kein garantierter Teil der kostenlosen API, Verlässlichkeit nimmt Richtung Prognose-Ende ab.`
+    : 'Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.';
 }
 function radarFrameStepMin(){
   const f=activeFrames();
@@ -1696,38 +1956,8 @@ function radarRenderFrame(i){
   const f=activeFrames(), pastLen=activePastLen();
   const frame=f[i];
   if(!frame||!radarMap)return;
-  if(radarMode==='rain'&&radarUsingDwdForLoc()){
-    const url=dwdOverlayUrl(frame.iso);
-    if(radarLayer&&radarLayer._isDwd){
-      radarLayer.setUrl(url);
-      radarLayer._iso=frame.iso;
-    }else{
-      if(radarLayer)radarMap.removeLayer(radarLayer);
-      radarLayer=L.imageOverlay(url,radarMap.getBounds(),{opacity:.75,zIndex:400}).addTo(radarMap);
-      radarLayer._isDwd=true;
-      radarLayer._iso=frame.iso;
-    }
-  }else if(radarMode==='rain'){
-    const url=`${radarHost}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
-    if(radarLayer&&!radarLayer._isSat&&!radarLayer._isDwd)radarLayer.setUrl(url);
-    else{
-      if(radarLayer)radarMap.removeLayer(radarLayer);
-      radarLayer=L.tileLayer(url,{opacity:.75,maxNativeZoom:12,zIndex:400}).addTo(radarMap);
-      radarLayer._isSat=false;
-    }
-  }else{
-    const iso=new Date(frame.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
-    const url=satOverlayUrl(iso);
-    if(radarLayer&&radarLayer._isSat){
-      radarLayer.setUrl(url);
-      radarLayer._iso=iso;
-    }else{
-      if(radarLayer)radarMap.removeLayer(radarLayer);
-      radarLayer=L.imageOverlay(url,radarMap.getBounds(),{opacity:.85,zIndex:400}).addTo(radarMap);
-      radarLayer._isSat=true;
-      radarLayer._iso=iso;
-    }
-  }
+  // Beschriftung und Badge zuerst und immer synchron — sie hängen nicht am Bild und sollen
+  // dem Slider ohne Verzögerung folgen, auch wenn der Frame selbst noch geladen wird.
   const offsetMin=(i-(pastLen-1))*radarFrameStepMin();
   const isForecast=i>=pastLen;
   const label=offsetMin===0?'Jetzt':(offsetMin>0?`Prognose +${offsetMin} Min.`:`${Math.abs(offsetMin)} Min. zurück`);
@@ -1735,18 +1965,16 @@ function radarRenderFrame(i){
   const badge=document.getElementById('radar-badge');
   badge.textContent=isForecast?'PROGNOSE':'LIVE';
   badge.classList.toggle('forecast',isForecast);
+  if(radarOverlayMode())radarShowOverlayFrame(i);
+  else radarShowTileFrame(frame);
 }
-// Debounced statt bei jedem oninput-Zwischenwert sofort ein WMS/Tile-Reload anzustoßen: beim
-// Ziehen des Sliders feuert oninput sehr häufig, und jeder Aufruf löst in radarRenderFrame ein
-// komplettes Tile-Redraw aus. Überlappen sich mehrere davon (Redraw entfernt alte Tiles, bevor
-// die neuen fertig geladen sind), verschwinden Regenfelder kurzzeitig — genau das gemeldete
-// Verhalten beim schnellen Scrubben. Nur der jeweils letzte Wert nach einer kurzen Pause löst
-// das eigentliche Rendering aus; das ist visuell nicht spürbar, verhindert aber die Überlappung.
-let radarSeekTimer=null;
+// Kein Debounce mehr vor dem Rendern: bereits geladene Frames werden direkt aus dem Speicher
+// gezeichnet, das ist billiger als das alte Warten und folgt dem Slider ohne Nachlauf. Die
+// Bremse sitzt jetzt eine Ebene tiefer — nur der Netzwerk-Request für noch fehlende Frames
+// wird in radarShowOverlayFrame verzögert.
 function radarSeek(i){
   radarIndex=+i;
-  clearTimeout(radarSeekTimer);
-  radarSeekTimer=setTimeout(()=>radarRenderFrame(radarIndex),90);
+  radarRenderFrame(radarIndex);
 }
 function radarTogglePlay(){
   const btn=document.getElementById('radar-play');
@@ -1773,7 +2001,12 @@ function radarSwitchMode(mode){
   document.getElementById('radar-tab-sat').classList.toggle('active',mode==='sat');
   document.getElementById('radar-tab-sat').setAttribute('aria-selected',mode==='sat');
   document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':'☁️ Wolkenradar';
-  if(mode==='rain'){radarUsingDwdForLoc()?refreshRainDisplay():fetchRadarFrames();}else fetchSatFrames();
+  if(mode==='rain'){
+    refreshRainDisplay();
+    // Frames erst holen, wenn wirklich noch keine da sind — sonst reicht refreshRainDisplay
+    // und der Tabwechsel kommt ohne Netzwerk-Roundtrip aus.
+    if(!radarUsingDwdForLoc()&&!radarFrames.length)fetchRadarFrames();
+  }else fetchSatFrames();
 }
 // Exakt dieselbe Zeitachse wie das Regenradar (gleiche Zeitpunkte, gleiche Taktung) —
 // nur der Vergangenheits-Teil, Satellit liefert keine Prognose. So verhalten sich Ticks,
@@ -1786,6 +2019,7 @@ function radarSwitchMode(mode){
 const SAT_LATENCY_MIN=20;
 function fetchSatFrames(){
   if(!radarMap)return;
+  if(!radarViewCovers())radarNewView();
   if(radarFrames.length&&radarPastLen){
     satFrames=radarFrames.slice(0,radarPastLen).map(f=>({time:f.time-SAT_LATENCY_MIN*60}));
   }else{
@@ -1801,35 +2035,30 @@ function fetchSatFrames(){
   radarBuildTicks();
   radarRenderFrame(radarIndex);
   document.getElementById('radar-note').textContent='Meteosat IR10.8 μm (EUMETSAT, frei zugänglich). Graustufen: heller = kälterer/höherer Wolkenschirm — funktioniert auch nachts. Keine Prognose, nur Beobachtung.';
-  // Alle Frames im Hintergrund vorladen: ein Einzelbild pro Frame statt einer Kachelmatrix
-  // macht das günstig genug, damit Scrubben danach ohne Wartezeit aus dem Browser-Cache läuft.
-  satFrames.forEach(fr=>{
-    const iso=new Date(fr.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
-    new Image().src=satOverlayUrl(iso);
-  });
+  // Alle Frames im Hintergrund vorladen und im Speicher behalten, damit Scrubben danach ohne
+  // Netzwerk läuft (siehe Frame-Engine oben).
+  radarPrefetchFrames();
 }
 // ── Satelliten-Abgleich für "Jetzt" (dieselbe EUMETSAT-Quelle wie oben) ──────
 // Einzelbild-Overlay statt Kachelraster fürs DWD-Regenradar — analog zu satOverlayUrl unten.
-// Ein großer GetMap-Request pro Frame statt mehrerer Kachel-Requests, dazu per Prefetch (siehe
-// prefetchDwdFrames) im Hintergrund vorgeladen, damit Scrubben aus dem Browser-Cache läuft statt
-// bei jedem Frame-Wechsel live beim DWD-Server anzufragen.
+// Ein großer GetMap-Request pro Frame statt mehrerer Kachel-Requests; die Bbox kommt aus der
+// Frame-Engine (radarComputeView) und ist bewusst etwas größer als der sichtbare Ausschnitt,
+// damit kleine Kartenbewegungen den vorgeladenen Bildvorrat nicht entwerten.
 function dwdOverlayUrl(iso){
-  const b=radarMap.getBounds(), size=radarMap.getSize();
-  const bbox=`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  return `${DWD_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=${DWD_LAYER}&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${bbox}&width=${Math.round(size.x)}&height=${Math.round(size.y)}&time=${encodeURIComponent(iso)}`;
+  const v=radarEnsureView();
+  return `${DWD_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=${DWD_LAYER}&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${v.bbox}&width=${v.w}&height=${v.h}&time=${encodeURIComponent(iso)}`;
 }
 const EUMETSAT_WMS='https://view.eumetsat.int/geoserver/wms';
 // Einzelbild-Overlay statt Kachelraster: EUMETSATs WMS rendert on-the-fly (kein CDN wie
 // RainViewer) — ein großes Bild pro Frame ist spürbar schneller als 8 Kacheln pro Frame.
 function satOverlayUrl(iso){
-  const b=radarMap.getBounds(), size=radarMap.getSize();
-  const bbox=`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-  return `${EUMETSAT_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes:ir108&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${bbox}&width=${Math.round(size.x)}&height=${Math.round(size.y)}&time=${encodeURIComponent(iso)}`;
+  const v=radarEnsureView();
+  return `${EUMETSAT_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=msg_fes:ir108&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${v.bbox}&width=${v.w}&height=${v.h}&time=${encodeURIComponent(iso)}`;
 }
 function prefetchSatNow(){
-  if(!radarMap||!radarFrames.length)return;
+  if(!radarMap||!radarFrames.length||!radarEnsureView())return;
   const iso=new Date((radarFrames[radarPastLen-1].time-SAT_LATENCY_MIN*60)*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
-  new Image().src=satOverlayUrl(iso);
+  radarImgLoad(satOverlayUrl(iso),5);
 }
 // Konservativer Grauwert-Schwellwert (der Kanal ist ein reiner Grauverlauf, R=G=B): darunter
 // dominiert die warme Erdoberfläche das Pixel, es liegt also kein kalter/hoher Wolkenschirm
