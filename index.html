@@ -847,7 +847,13 @@ function brightSkyToWmoCode(w){
     case 'sleet': return 67; // WMO kennt kein reines "Schneeregen", nächstliegend als Regen behandelt
     case 'rain': { const mm=w.precipitation_60??0; return mm>=5?65:mm>=1?63:61; }
     case 'fog': return 45;
-    default: { const cc=w.cloud_cover??0; return cc<=20?0:cc<=50?1:cc<=80?2:3; } // 'dry'/unbekannt
+    // DWD-Stationen melden die Bedeckung in Achteln, in Prozent also nur als 0/12/25/38/50/
+    // 63/75/88/100. Die "Klar"-Grenze lag bei 20 % und damit unterhalb von 2/8 (25 %) — schon
+    // ein paar einzelne Quellwolken über der bis zu 10 km entfernten Station (siehe
+    // station.distanceKm) machten aus blauem Himmel "Überwiegend klar" 🌤. Meteorologisch gilt
+    // der Himmel bis 2/8 als klar, die Schwelle liegt jetzt zwischen 2/8 und 3/8, damit nicht
+    // eine einzelne Okta-Stufe die Anzeige kippt. Die übrigen Schwellen bleiben unverändert.
+    default: { const cc=w.cloud_cover??0; return cc<=31?0:cc<=50?1:cc<=80?2:3; } // 'dry'/unbekannt
   }
 }
 // Tagescharakter aus Stunden-Codes: Gewitter schlägt alles, Niederschlag ab 2 Stunden,
@@ -967,18 +973,24 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
   const iconNowCode = (iconMi!=null && rawM.hourly.weather_code_icon_seamless)
     ? rawM.hourly.weather_code_icon_seamless[iconMi] : null;
   let nowCode = iconNowCode!=null ? iconNowCode : cur.weather_code;
-  // Satelliten-Override: ICON meldet "wechselnd bewölkt/bedeckt" (2/3, kein Niederschlag),
-  // aber das IR-Satellitenbild zeigt keinen kalten Wolkenschirm über dem Standort → als klar
-  // werten. Nur in dieser Richtung und nie bei Regen-/Gewittercodes — die bleiben ICON-basiert.
-  if (satClear && (nowCode===2 || nowCode===3)) nowCode = 0;
   // Innerhalb Deutschlands: echte Beobachtung der nächsten DWD-Station (Bright Sky) statt
-  // Modell-Schätzung für "Jetzt" — ersetzt den Satelliten-Override, da bereits real gemessen.
+  // Modell-Schätzung für "Jetzt".
   let station = {source:'openmeteo'};
   if (bs && bs.weather && bs.weather.temperature!=null) {
     nowCode = brightSkyToWmoCode(bs.weather);
     const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
     if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
   }
+  const bsUsed = station.source==='brightsky';
+  // Satelliten-Override Richtung "klar": das IR-Satellitenbild zeigt keinen kalten Wolkenschirm
+  // über dem Standort. Nie bei Regen-/Gewittercodes — die bleiben Modell-/Stationsbasiert.
+  // Beruht die Anzeige auf einem Modellwert, darf der Satellit auch "wechselnd bewölkt/bedeckt"
+  // (2/3) kippen. Gegen eine echte Stationsmessung greift nur die milde Stufe 1 → 0: tiefe,
+  // warme Stratusdecken bleiben im IR-Kanal dunkel (siehe SAT_CLEAR_LUM_MAX) und würden sonst
+  // eine real gemeldete Bedeckung fälschlich als "Klar" ausgeben. Läuft bewusst auch nach dem
+  // Stationswert — spiegelbildlich zum Cloudy-Override darunter, weil die Station gut 10 km
+  // entfernt stehen kann und der Satellit den exakten Standort sieht.
+  if (satClear && (nowCode===1 || (!bsUsed && (nowCode===2 || nowCode===3)))) nowCode = 0;
   // Wolkenradar-Override (Gegenrichtung): Station/Modell melden klar (0/1), aber der Satellit
   // zeigt eindeutig einen kalten/hohen Wolkenschirm über dem exakten Standort. Die Station kann
   // mehrere km entfernt liegen (siehe station.distanceKm) und dort lokal anders liegen — der
@@ -993,7 +1005,6 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
   const isNightNow=nowMin<toMin(sunrise)||nowMin>=toMin(sunset);
   const ico=(isNightNow&&['☀️','🌤','⛅'].includes(icoRaw))?'🌙':icoRaw;
 
-  const bsUsed = station.source==='brightsky';
   const current = {
     temp: bsUsed ? Math.round(bs.weather.temperature) : Math.round(cur.temperature_2m),
     feelsLike: Math.round(cur.apparent_temperature),
