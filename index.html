@@ -970,24 +970,27 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
   const iconNowCode = (iconMi!=null && rawM.hourly.weather_code_icon_seamless)
     ? rawM.hourly.weather_code_icon_seamless[iconMi] : null;
   let nowCode = iconNowCode!=null ? iconNowCode : cur.weather_code;
-  // Satelliten-Override: ICON meldet "wechselnd bewölkt/bedeckt" (2/3, kein Niederschlag),
-  // aber das IR-Satellitenbild zeigt keinen kalten Wolkenschirm über dem Standort → als klar
-  // werten. Nur in dieser Richtung und nie bei Regen-/Gewittercodes — die bleiben ICON-basiert.
-  if (satClear && (nowCode===2 || nowCode===3)) nowCode = 0;
   // Innerhalb Deutschlands: echte Beobachtung der nächsten DWD-Station (Bright Sky) statt
-  // Modell-Schätzung für "Jetzt" — ersetzt den Satelliten-Override, da bereits real gemessen.
+  // Modell-Schätzung für "Jetzt" — ersetzt die Modell-Schätzung, da bereits real gemessen.
   let station = {source:'openmeteo'};
   if (bs && bs.weather && bs.weather.temperature!=null) {
     nowCode = brightSkyToWmoCode(bs.weather);
     const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
     if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
   }
-  // Wolkenradar-Override (Gegenrichtung): Station/Modell melden klar (0/1), aber der Satellit
-  // zeigt eindeutig einen kalten/hohen Wolkenschirm über dem exakten Standort. Die Station kann
-  // mehrere km entfernt liegen (siehe station.distanceKm) und dort lokal anders liegen — der
-  // Satellit ist am exakten Punkt verlässlicher. "Bedeckt" (3) statt z.B. "wechselnd bewölkt",
-  // da sich Bewölkungsgrad aus einem Graustufen-Pixel nicht feiner unterscheiden lässt — derselbe
-  // generische Cloudy-Fallback-Code wie in reconcileCode() weiter unten.
+  // Satelliten-Override, beide Richtungen — bewusst NACH der Stations-Zuweisung oben: die
+  // Station kann mehrere km entfernt liegen (siehe station.distanceKm) und dort lokal anders
+  // liegen, der Satellit ist am exakten Standort verlässlicher. Lief die "klar"-Richtung vor der
+  // Stations-Zuweisung (wie ursprünglich), überschrieb die Station sie wieder — dann griff der
+  // Override in Deutschland (wo fast immer eine Bright-Sky-Station in der Nähe ist) faktisch nie.
+  // Modell/Station melden "wechselnd bewölkt/bedeckt" (2/3, kein Niederschlag), Satellit zeigt
+  // aber keinen kalten Wolkenschirm über dem exakten Standort → als klar werten. Nur in dieser
+  // Richtung und nie bei Regen-/Gewittercodes.
+  if (satClear && (nowCode===2 || nowCode===3)) nowCode = 0;
+  // Gegenrichtung: Station/Modell melden klar (0/1), aber der Satellit zeigt eindeutig einen
+  // kalten/hohen Wolkenschirm über dem exakten Standort. "Bedeckt" (3) statt z.B. "wechselnd
+  // bewölkt", da sich Bewölkungsgrad aus einem Graustufen-Pixel nicht feiner unterscheiden lässt
+  // — derselbe generische Cloudy-Fallback-Code wie in reconcileCode() weiter unten.
   if (satCloudy && (nowCode===0 || nowCode===1)) nowCode = 3;
   const [icoRaw,cond] = wmoIcon(nowCode);
   // Nachts nie ein Sonnen-Icon zeigen, auch bei klarem/leicht bewölktem Himmel — dann Mond statt Sonne.
