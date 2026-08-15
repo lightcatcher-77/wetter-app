@@ -209,9 +209,6 @@
     .alt-peak-label{font-size:13px;color:var(--text-dim);}
     .alt-note{font-size:11px;color:var(--text-dim);margin-top:14px;line-height:1.5;}
     .alt-fl{font-size:10px;color:var(--text-dim);margin-top:4px;}
-    .alt-days{margin-top:18px;}
-    .alt-day{margin-bottom:14px;}
-    .alt-day:last-child{margin-bottom:0;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -538,7 +535,7 @@ function render(data){
       </div>
     </div>
     ${makeHourly(data.hourly24,cur.sunrise,cur.sunset,m&&m.utcOffset)}
-    <div class="fc-scroll"><div class="fc-grid" style="grid-template-columns:repeat(${n},minmax(108px,1fr))">
+    <div class="fc-scroll" id="fc-scroll"><div class="fc-grid" style="grid-template-columns:repeat(${n},minmax(108px,1fr))">
       ${fc.map((r,i)=>{
         const th=r.thunder||0;
         return`<div class="fc-card ${i===0?'today':''} ${i===bestI?'best':''}" onclick="toggleDay(${i})" title="Tagesverlauf anzeigen">
@@ -802,7 +799,7 @@ function doubleCheck(data) {
 
 function closeDay(){
   selDay=-1;
-  document.querySelectorAll('.fc-card').forEach(c=>c.classList.remove('sel'));
+  document.querySelectorAll('#fc-scroll .fc-card').forEach(c=>c.classList.remove('sel'));
   const el=document.getElementById('day-detail');
   if(el)el.style.display='none';
 }
@@ -810,7 +807,7 @@ function toggleDay(i){
   const el=document.getElementById('day-detail');
   if(!el)return;
   if(selDay===i){closeDay();return;}
-  document.querySelectorAll('.fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i));
+  document.querySelectorAll('#fc-scroll .fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i));
   selDay=i;
   const r=lastFc[i];
   el.style.display='block';
@@ -2456,17 +2453,18 @@ function computeAltDays(h,elevation){
   const dayHours={};
   h.time.forEach((t,idx)=>{const ds=t.slice(0,10);(dayHours[ds]=dayHours[ds]||[]).push(idx);});
   const hourAt=ix=>+h.time[ix].slice(11,13);
+  const tempAt=ix=>{
+    const levels=ALT_LEVELS.map(lv=>({h:h[`geopotential_height_${lv}hPa`][ix],t:h[`temperature_${lv}hPa`][ix]}))
+      .filter(p=>p.h!=null&&p.t!=null).sort((a,b)=>a.h-b.h);
+    const interp=interpTempAtHeight(levels,elevation);
+    return interp?interp.temp:null;
+  };
   return Object.keys(dayHours).slice(0,5).map(ds=>{
     const hIdxs=dayHours[ds];
     const parts=[['Morgens',6,11],['Mittags',12,17],['Abends',18,23]].map(([lbl,h1,h2])=>{
       const ixs=hIdxs.filter(ix=>hourAt(ix)>=h1&&hourAt(ix)<=h2);
       if(!ixs.length) return null;
-      const temps=ixs.map(ix=>{
-        const levels=ALT_LEVELS.map(lv=>({h:h[`geopotential_height_${lv}hPa`][ix],t:h[`temperature_${lv}hPa`][ix]}))
-          .filter(p=>p.h!=null&&p.t!=null).sort((a,b)=>a.h-b.h);
-        const interp=interpTempAtHeight(levels,elevation);
-        return interp?interp.temp:null;
-      }).filter(v=>v!=null);
+      const temps=ixs.map(tempAt).filter(v=>v!=null);
       if(!temps.length) return null;
       const codes=ixs.map(ix=>h.weather_code[ix]);
       const segRain=Math.round(Math.max(...ixs.map(ix=>h.precipitation_probability[ix]||0)));
@@ -2478,27 +2476,79 @@ function computeAltDays(h,elevation){
         tmin:Math.round(Math.min(...temps)),tmax:Math.round(Math.max(...temps)),
         rain:segRain,rainMm,wind,thunder:Math.max(...codes.map(thunderPct))};
     }).filter(Boolean);
+    if(!parts.length) return null;
+    // Tageswerte fürs kompakte Karten-Grid — analog zur Aggregation in buildWeatherData
+    // (forecast[]), aber aus den auf die Zielhöhe interpolierten Werten statt raw.hourly.
+    const dayTemps=hIdxs.map(tempAt).filter(v=>v!=null);
+    const windowCodes=hIdxs.filter(ix=>hourAt(ix)>=9&&hourAt(ix)<=18).map(ix=>h.weather_code[ix]);
+    const dayCodes=windowCodes.length?windowCodes:hIdxs.map(ix=>h.weather_code[ix]);
+    const dayRain=Math.round(Math.max(...hIdxs.map(ix=>h.precipitation_probability[ix]||0)));
+    const [dIcon,dCond]=wmoIcon(reconcileCode(pickDayCode(dayCodes),dayRain));
     const dt=new Date(ds+'T00:00:00');
-    return {wd:['So','Mo','Di','Mi','Do','Fr','Sa'][dt.getDay()],date:`${ds.slice(8,10)}.${ds.slice(5,7)}.`,parts};
-  }).filter(d=>d.parts.length);
+    return {
+      wd:['So','Mo','Di','Mi','Do','Fr','Sa'][dt.getDay()],date:`${ds.slice(8,10)}.${ds.slice(5,7)}.`,
+      icon:dIcon,cond:dCond,
+      max:dayTemps.length?Math.round(Math.max(...dayTemps)):null,
+      min:dayTemps.length?Math.round(Math.min(...dayTemps)):null,
+      rain:dayRain,
+      rainMm:Math.round(hIdxs.reduce((s,ix)=>s+(h.precipitation[ix]||0),0)*10)/10,
+      wind:Math.round(Math.max(...hIdxs.map(ix=>h.wind_speed_10m[ix]||0))),
+      thunder:Math.max(...dayCodes.map(thunderPct)),
+      parts
+    };
+  }).filter(Boolean);
 }
+// Kompakte Tageskarten-Reihe + Antippen-für-Details — dasselbe Muster wie die normale
+// 5-Tage-Vorschau (fc-scroll/fc-card + day-detail via toggleDay), eigener State (altSelDay/
+// lastAltDays) und eigene DOM-IDs, damit sich die beiden Kartenreihen beim Antippen nicht
+// gegenseitig beeinflussen.
+let lastAltDays=[], altSelDay=-1;
 function renderAltDays(days){
+  lastAltDays=days; altSelDay=-1;
   if(!days.length) return '';
   return `<div class="hourly-head" style="padding:0 0 10px">📅 5-Tage-Vorschau</div>
-    <div class="alt-days">${days.map(d=>`
-      <div class="alt-day">
-        <div class="dav-day-lbl">${esc(d.wd)} ${esc(d.date)}</div>
-        <div class="dd-grid">
-          ${d.parts.map(p=>`<div class="dd-seg">
-            <div class="dd-lbl">${p.lbl}</div>
-            <span class="dd-icon">${p.icon}</span>
-            <div class="dd-cond">${p.cond}</div>
-            <div class="dd-temp"><span style="color:${tempCol(p.tmax)}">${p.tmax}°</span><span class="dd-min"> / ${p.tmin}°</span></div>
-            <div class="dd-rain">💧 ${p.rain}%${p.rainMm>=0.1?` · ${p.rainMm}mm`:''}${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
-            <div class="dd-wind">🌬 ${p.wind} km/h</div>
-          </div>`).join('')}
-        </div>
-      </div>`).join('')}
+    <div class="fc-scroll" id="alt-fc-scroll"><div class="fc-grid" style="grid-template-columns:repeat(${days.length},minmax(96px,1fr))">
+      ${days.map((d,i)=>{
+        const th=d.thunder||0;
+        return`<div class="fc-card" onclick="altToggleDay(${i})" title="Tagesverlauf anzeigen">
+          <div class="fc-day">${d.wd}</div><div class="fc-date">${d.date}</div>
+          <span class="fc-icon">${d.icon}</span>
+          <div class="fc-max" style="color:${tempCol(d.max)}">${d.max}°</div>
+          <div class="fc-min">${d.min}°</div>
+          <div class="fc-rain">💧 ${d.rain}%${d.rainMm>=0.1?` · ${d.rainMm}mm`:''}</div>
+          ${th>25?`<div class="fc-thunder">⚡ ${th}%</div>`:''}
+          <div class="fc-wind">🌬 ${d.wind}</div>
+        </div>`;
+      }).join('')}
+    </div></div>
+    <div class="tap-hint">Tag antippen für Morgens · Mittags · Abends</div>
+    <div class="day-detail" id="alt-day-detail" style="display:none"></div>`;
+}
+function altCloseDay(){
+  altSelDay=-1;
+  document.querySelectorAll('#alt-fc-scroll .fc-card').forEach(c=>c.classList.remove('sel'));
+  const el=document.getElementById('alt-day-detail');
+  if(el)el.style.display='none';
+}
+function altToggleDay(i){
+  const el=document.getElementById('alt-day-detail');
+  if(!el)return;
+  if(altSelDay===i){altCloseDay();return;}
+  document.querySelectorAll('#alt-fc-scroll .fc-card').forEach((c,ci)=>c.classList.toggle('sel',ci===i));
+  altSelDay=i;
+  const d=lastAltDays[i];
+  el.style.display='block';
+  const closeBtn=`<button class="dd-close" onclick="altCloseDay()" aria-label="Schließen" title="Schließen">✕</button>`;
+  el.innerHTML=`${closeBtn}<div class="dd-head">${d.icon} ${d.wd} ${d.date} — Tagesverlauf</div>
+    <div class="dd-grid">
+    ${d.parts.map(p=>`<div class="dd-seg">
+      <div class="dd-lbl">${p.lbl}</div>
+      <span class="dd-icon">${p.icon}</span>
+      <div class="dd-cond">${p.cond}</div>
+      <div class="dd-temp"><span style="color:${tempCol(p.tmax)}">${p.tmax}°</span><span class="dd-min"> / ${p.tmin}°</span></div>
+      <div class="dd-rain">💧 ${p.rain}%${p.rainMm>=0.1?` · ${p.rainMm}mm`:''}${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
+      <div class="dd-wind">🌬 ${p.wind} km/h</div>
+    </div>`).join('')}
     </div>`;
 }
 function renderAltResult(name,elevation,hours,labelIcon,days){
