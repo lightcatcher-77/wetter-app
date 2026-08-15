@@ -2029,6 +2029,12 @@ function radarRenderFrame(i){
 function radarSeek(i){
   radarIndex=+i;
   radarRenderFrame(radarIndex);
+  // Sobald der Zeitzähler einmal bewegt wird, den kompletten Frame-Vorrat im Hintergrund
+  // durchladen (nicht nur den einzelnen angesteuerten Frame) — danach läuft weiteres Scrubben
+  // komplett aus dem Speicher. radarImgLoad überspringt bereits geladene/wartende Frames, daher
+  // ist der wiederholte Aufruf bei jedem Slider-Event unkritisch.
+  if(radarOverlayMode())radarPrefetchFrames();
+  else radarPrefetchTiles();
 }
 function radarTogglePlay(){
   const btn=document.getElementById('radar-play');
