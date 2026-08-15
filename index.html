@@ -205,6 +205,9 @@
     .dav-day-lbl{font-size:12px;color:var(--text-dim);font-weight:500;}
     .dav-day-txt{font-size:14px;line-height:1.5;color:var(--text);}
     .dav-stand{margin-top:12px;font-size:11px;color:var(--text-dim);}
+    .alt-tabs{display:flex;gap:8px;}
+    .alt-peak-label{font-size:13px;color:var(--text-dim);}
+    .alt-note{font-size:11px;color:var(--text-dim);margin-top:14px;line-height:1.5;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -304,6 +307,29 @@ function ensembleUrl(lat,lon){
 }
 function brightSkyUrl(lat,lon){
   return `https://api.brightsky.dev/current_weather?lat=${lat}&lon=${lon}`;
+}
+// ── Höhenwetter: Druckflächen-Interpolation für Temperatur auf Zielhöhe ──────
+const ALT_LEVELS=[1000,975,950,925,900,850,800,700,600,500]; // hPa, deckt ~0–5500 m ab (Mont Blanc inklusive)
+function altUrl(lat,lon){
+  const pTemp=ALT_LEVELS.map(h=>`temperature_${h}hPa`).join(',');
+  const pGeo=ALT_LEVELS.map(h=>`geopotential_height_${h}hPa`).join(',');
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${pTemp},${pGeo},precipitation_probability,precipitation,weather_code,freezing_level_height&forecast_days=1&timezone=auto`;
+}
+// Lineare Interpolation zwischen den zwei Druckflächen, deren geopotenzielle Höhe die Zielhöhe
+// einschließt (echtes Modellprofil statt pauschaler Faustformel). Liegt die Zielhöhe außerhalb
+// der abgedeckten Spanne, wird ab der äußersten bekannten Fläche mit der Standardatmosphäre
+// (0,65 °C/100 m) extrapoliert — modeled:false kennzeichnet diesen Fallback-Fall.
+function interpTempAtHeight(levels,targetM){
+  if(!levels.length) return null;
+  if(targetM<=levels[0].h) return {temp:levels[0].t+(levels[0].h-targetM)/100*0.65, modeled:false};
+  if(targetM>=levels[levels.length-1].h) return {temp:levels[levels.length-1].t-(targetM-levels[levels.length-1].h)/100*0.65, modeled:false};
+  for(let i=0;i<levels.length-1;i++){
+    if(targetM>=levels[i].h&&targetM<=levels[i+1].h){
+      const f=(targetM-levels[i].h)/(levels[i+1].h-levels[i].h);
+      return {temp:levels[i].t+f*(levels[i+1].t-levels[i].t), modeled:true};
+    }
+  }
+  return null;
 }
 function isGermany(lat,lon){
   // Grobe Bounding-Box (kein exaktes Grenzpolygon) — reicht als Weiche für die Bright-Sky-Priorisierung
@@ -541,6 +567,29 @@ function render(data){
     </div>
     ${renderModelMatrix(fc)}
     ${renderDavCard(data.dav)}
+    <div class="card model-matrix-card">
+      <div class="section-title collapsible" onclick="toggleSection(this,'alt-body')">🏔️ Höhenwetter<span class="chevron">▾</span></div>
+      <div class="collapse-body" id="alt-body">
+        <div class="alt-tabs">
+          <button class="chip active" id="alt-tab-peak" onclick="altSwitchTab('peak')">⛰️ Berg suchen</button>
+          <button class="chip" id="alt-tab-manual" onclick="altSwitchTab('manual')">✏️ Höhe manuell</button>
+        </div>
+        <div id="alt-peak-panel" class="loc-search">
+          <div class="search-row">
+            <input id="alt-search-input" type="search" placeholder="Berg suchen, z. B. Zugspitze…" autocomplete="off" oninput="onAltSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltSearch();}">
+            <button onclick="runAltSearch()">Suchen</button>
+          </div>
+          <div id="alt-search-results"></div>
+        </div>
+        <div id="alt-manual-panel" class="loc-search" style="display:none">
+          <div class="search-row">
+            <input id="alt-manual-input" type="number" inputmode="numeric" placeholder="Höhe in Metern, z. B. 2500" min="0" max="9000" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltManual();}">
+            <button onclick="runAltManual()">Berechnen</button>
+          </div>
+        </div>
+        <div id="alt-result"></div>
+      </div>
+    </div>
     <div class="card scores-card">
       <div class="section-title">🥾 Outdoor-Score (10 = ideal)</div>
       <div class="score-grid" style="grid-template-columns:repeat(${n},1fr)">
@@ -2298,6 +2347,131 @@ function updateFavBtn(){
   btn.textContent=on?'★':'☆';
   btn.classList.toggle('on',on);
   btn.title=on?'Favorit entfernen':'Als Favorit speichern';
+}
+
+// ── Höhenwetter: Berg-Suche / manuelle Höhe → Temperatur, Regen, Gewitter, Nullgradgrenze ────
+let altSearchResults=[], altSearchDebounce=null, altReqId=0;
+function altSwitchTab(tab){
+  document.getElementById('alt-tab-peak').classList.toggle('active',tab==='peak');
+  document.getElementById('alt-tab-manual').classList.toggle('active',tab==='manual');
+  document.getElementById('alt-peak-panel').style.display=tab==='peak'?'block':'none';
+  document.getElementById('alt-manual-panel').style.display=tab==='manual'?'block':'none';
+}
+function onAltSearchInput(){
+  clearTimeout(altSearchDebounce);
+  const q=document.getElementById('alt-search-input').value.trim();
+  const box=document.getElementById('alt-search-results');
+  if(q.length<2){altReqId++;box.innerHTML='';return;}
+  altSearchDebounce=setTimeout(runAltSearch,300);
+}
+async function runAltSearch(){
+  clearTimeout(altSearchDebounce);
+  const q=document.getElementById('alt-search-input').value.trim();
+  const box=document.getElementById('alt-search-results');
+  if(!q){box.innerHTML='';return;}
+  const myId=++altReqId;
+  box.innerHTML='<div class="sr-note">Suche…</div>';
+  try{
+    const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=de&format=json`);
+    if(myId!==altReqId)return;
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    if(myId!==altReqId)return;
+    // Berge/Gipfel (Feature-Codes MT/PK) zuerst, sonst bleibt die Relevanz-Reihenfolge der API erhalten.
+    const all=(j.results||[]).map(x=>({name:x.name,lat:x.latitude,lon:x.longitude,elevation:x.elevation,isPeak:x.feature_code==='MT'||x.feature_code==='PK',info:[x.admin1,x.country].filter(Boolean).join(', ')}));
+    altSearchResults=[...all.filter(x=>x.isPeak),...all.filter(x=>!x.isPeak)];
+    box.innerHTML=altSearchResults.length
+      ?altSearchResults.map((x,i)=>`<button class="sr-item" onclick="pickAltPeak(${i})">${x.isPeak?'⛰️ ':''}${esc(x.name)}${x.elevation!=null?` · ${Math.round(x.elevation)} m`:''}<span>${esc(x.info)}</span></button>`).join('')
+      :'<div class="sr-note">Kein Berg gefunden.</div>';
+  }catch(e){
+    if(myId!==altReqId)return;
+    box.innerHTML='<div class="sr-note">Suche fehlgeschlagen — bitte erneut versuchen.</div>';
+  }
+}
+function pickAltPeak(i){
+  const x=altSearchResults[i];if(!x)return;
+  if(x.elevation==null){
+    document.getElementById('alt-result').innerHTML='<div class="sr-note">Für diesen Ort ist keine Höhe bekannt — bitte manuell eingeben.</div>';
+    return;
+  }
+  document.getElementById('alt-search-results').innerHTML='';
+  document.getElementById('alt-search-input').value=x.name;
+  runAltCalc(x.lat,x.lon,Math.round(x.elevation),x.name,'⛰️');
+}
+function runAltManual(){
+  const v=parseFloat(document.getElementById('alt-manual-input').value);
+  const box=document.getElementById('alt-result');
+  if(!isFinite(v)||v<0||v>9000){box.innerHTML='<div class="sr-note">Bitte eine gültige Höhe in Metern eingeben.</div>';return;}
+  if(!shownLoc){box.innerHTML='<div class="sr-note">Kein Standort verfügbar — bitte kurz warten, bis das Wetter geladen ist.</div>';return;}
+  runAltCalc(shownLoc.lat,shownLoc.lon,Math.round(v),shownLoc.name,'📍');
+}
+async function runAltCalc(lat,lon,elevation,name,labelIcon){
+  const box=document.getElementById('alt-result');
+  const myId=++altReqId;
+  box.innerHTML='<div class="sr-note">Berechne Höhenwetter…</div>';
+  try{
+    const r=await fetch(altUrl(lat,lon));
+    if(myId!==altReqId)return;
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    if(myId!==altReqId)return;
+    const h=j.hourly;
+    if(!h||!h.time) throw new Error('Unerwartetes Antwortformat');
+    const nowIso=nowHourISOAt(j.utc_offset_seconds);
+    let idx=h.time.findIndex(t=>t.slice(0,13)>=nowIso);
+    if(idx<0) idx=0;
+    const hours=[];
+    for(let i=idx;i<Math.min(h.time.length,idx+24);i++){
+      const levels=ALT_LEVELS.map(lv=>({h:h[`geopotential_height_${lv}hPa`][i],t:h[`temperature_${lv}hPa`][i]}))
+        .filter(p=>p.h!=null&&p.t!=null).sort((a,b)=>a.h-b.h);
+      const interp=interpTempAtHeight(levels,elevation);
+      if(!interp) continue;
+      hours.push({
+        iso:h.time[i],
+        temp:Math.round(interp.temp*10)/10,
+        modeled:interp.modeled,
+        rain:Math.round(h.precipitation_probability[i]||0),
+        rainMm:Math.round((h.precipitation[i]||0)*10)/10,
+        weatherCode:h.weather_code[i],
+        thunder:thunderPct(h.weather_code[i]),
+        freezingLevel:h.freezing_level_height[i]
+      });
+    }
+    if(!hours.length) throw new Error('Keine Höhendaten verfügbar');
+    box.innerHTML=renderAltResult(name,elevation,hours,labelIcon);
+  }catch(e){
+    if(myId!==altReqId)return;
+    box.innerHTML=`<div class="sr-note">Höhenwetter konnte nicht berechnet werden (${esc(e.message||'Fehler')}).</div>`;
+  }
+}
+function renderAltResult(name,elevation,hours,labelIcon){
+  const now=hours[0];
+  const [icon,cond]=wmoIcon(now.weatherCode);
+  const showTh=now.thunder>25;
+  const fl=now.freezingLevel;
+  const flTxt=(fl!=null&&isFinite(fl))
+    ? (elevation>fl
+        ? `❄️ Nullgradgrenze ${Math.round(fl)} m — auf ${elevation} m voraussichtlich Schnee`
+        : `🌧️ Nullgradgrenze ${Math.round(fl)} m — auf ${elevation} m voraussichtlich Regen`)
+    : '';
+  const cells=hours.map((c,i)=>{
+    const isNow=i===0;
+    const [ic]=wmoIcon(c.weatherCode);
+    const rainTxt=c.rain>0?`💧${c.rain}%`:`<span style="opacity:.3">💧–</span>`;
+    const cls=['h-cell',isNow?'h-now':'',c.thunder>40?'h-storm':''].filter(Boolean).join(' ');
+    return `<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':c.iso.slice(11,16)}</div><span class="h-icon">${ic}</span><div class="h-temp" style="color:${tempCol(c.temp)}">${c.temp}°</div><div class="h-rain">${rainTxt}</div>${c.rainMm>=0.1?`<div class="h-rain">${c.rainMm}mm</div>`:''}${c.thunder>25?`<div class="h-thunder">⚡${c.thunder}%</div>`:''}</div>`;
+  }).join('');
+  return `
+    <div class="alt-peak-label">${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</div>
+    <div class="hero-stats" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
+      <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div></div>
+      <div class="stat-box"><div class="sv">💧 ${now.rain}%</div><div class="sl">Regen${now.rainMm>=0.1?` · ${now.rainMm}mm`:''}</div></div>
+      <div class="${showTh?'stat-box thunder-stat':'stat-box'}"><div class="sv">⚡ ${now.thunder}%</div><div class="sl">Gewitter</div></div>
+    </div>
+    ${flTxt?`<div class="dav-badge" style="margin-top:12px">${flTxt}</div>`:''}
+    <div class="hourly-scroll" style="padding:14px 0 0"><div class="hourly-inner">${cells}</div></div>
+    <div class="alt-note">Modellschätzung (Interpolation zwischen Druckflächen${hours.some(c=>!c.modeled)?', teils Extrapolation mit Standardatmosphäre':''}), keine lokalen Effekte wie Sonnenexposition, Kaltluftseen oder Wind berücksichtigt.</div>
+  `;
 }
 
 // ── Laden & Anzeigen ─────────────────────────────────────────────────────────
