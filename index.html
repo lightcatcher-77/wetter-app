@@ -208,6 +208,10 @@
     .alt-tabs{display:flex;gap:8px;}
     .alt-peak-label{font-size:13px;color:var(--text-dim);}
     .alt-note{font-size:11px;color:var(--text-dim);margin-top:14px;line-height:1.5;}
+    .alt-fl{font-size:10px;color:var(--text-dim);margin-top:4px;}
+    .alt-days{margin-top:18px;}
+    .alt-day{margin-bottom:14px;}
+    .alt-day:last-child{margin-bottom:0;}
     .scores-card{padding:18px 22px;margin-bottom:14px;animation:slideUp .8s;}
     .score-grid{display:grid;gap:8px;}
     .score-item{text-align:center;}
@@ -313,7 +317,7 @@ const ALT_LEVELS=[1000,975,950,925,900,850,800,700,600,500]; // hPa, deckt ~0–
 function altUrl(lat,lon){
   const pTemp=ALT_LEVELS.map(h=>`temperature_${h}hPa`).join(',');
   const pGeo=ALT_LEVELS.map(h=>`geopotential_height_${h}hPa`).join(',');
-  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${pTemp},${pGeo},precipitation_probability,precipitation,weather_code,freezing_level_height&forecast_days=1&timezone=auto`;
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${pTemp},${pGeo},precipitation_probability,precipitation,weather_code,freezing_level_height,wind_speed_10m&forecast_days=5&timezone=auto`;
 }
 // Lineare Interpolation zwischen den zwei Druckflächen, deren geopotenzielle Höhe die Zielhöhe
 // einschließt (echtes Modellprofil statt pauschaler Faustformel). Liegt die Zielhöhe außerhalb
@@ -2438,25 +2442,81 @@ async function runAltCalc(lat,lon,elevation,name,labelIcon){
       });
     }
     if(!hours.length) throw new Error('Keine Höhendaten verfügbar');
-    box.innerHTML=renderAltResult(name,elevation,hours,labelIcon);
+    const days=computeAltDays(h,elevation);
+    box.innerHTML=renderAltResult(name,elevation,hours,labelIcon,days);
   }catch(e){
     if(myId!==altReqId)return;
     box.innerHTML=`<div class="sr-note">Höhenwetter konnte nicht berechnet werden (${esc(e.message||'Fehler')}).</div>`;
   }
 }
-function renderAltResult(name,elevation,hours,labelIcon){
+// Tagesabschnitte (Morgens/Mittags/Abends) für die nächsten 5 Tage — analog zur Morgens/Mittags/
+// Abends-Aufteilung der normalen Tagesvorhersage (siehe buildWeatherData), aber mit der auf die
+// Zielhöhe interpolierten Temperatur statt raw.hourly.temperature_2m.
+function computeAltDays(h,elevation){
+  const dayHours={};
+  h.time.forEach((t,idx)=>{const ds=t.slice(0,10);(dayHours[ds]=dayHours[ds]||[]).push(idx);});
+  const hourAt=ix=>+h.time[ix].slice(11,13);
+  return Object.keys(dayHours).slice(0,5).map(ds=>{
+    const hIdxs=dayHours[ds];
+    const parts=[['Morgens',6,11],['Mittags',12,17],['Abends',18,23]].map(([lbl,h1,h2])=>{
+      const ixs=hIdxs.filter(ix=>hourAt(ix)>=h1&&hourAt(ix)<=h2);
+      if(!ixs.length) return null;
+      const temps=ixs.map(ix=>{
+        const levels=ALT_LEVELS.map(lv=>({h:h[`geopotential_height_${lv}hPa`][ix],t:h[`temperature_${lv}hPa`][ix]}))
+          .filter(p=>p.h!=null&&p.t!=null).sort((a,b)=>a.h-b.h);
+        const interp=interpTempAtHeight(levels,elevation);
+        return interp?interp.temp:null;
+      }).filter(v=>v!=null);
+      if(!temps.length) return null;
+      const codes=ixs.map(ix=>h.weather_code[ix]);
+      const segRain=Math.round(Math.max(...ixs.map(ix=>h.precipitation_probability[ix]||0)));
+      const rc=reconcileCode(pickDayCode(codes),segRain);
+      const [pic,pco]=wmoIcon(rc);
+      const rainMm=Math.round(ixs.reduce((s,ix)=>s+(h.precipitation[ix]||0),0)*10)/10;
+      const wind=Math.round(Math.max(...ixs.map(ix=>h.wind_speed_10m[ix]||0)));
+      return {lbl,icon:pic,cond:pco,
+        tmin:Math.round(Math.min(...temps)),tmax:Math.round(Math.max(...temps)),
+        rain:segRain,rainMm,wind,thunder:Math.max(...codes.map(thunderPct))};
+    }).filter(Boolean);
+    const dt=new Date(ds+'T00:00:00');
+    return {wd:['So','Mo','Di','Mi','Do','Fr','Sa'][dt.getDay()],date:`${ds.slice(8,10)}.${ds.slice(5,7)}.`,parts};
+  }).filter(d=>d.parts.length);
+}
+function renderAltDays(days){
+  if(!days.length) return '';
+  return `<div class="hourly-head" style="padding:0 0 10px">📅 5-Tage-Vorschau</div>
+    <div class="alt-days">${days.map(d=>`
+      <div class="alt-day">
+        <div class="dav-day-lbl">${esc(d.wd)} ${esc(d.date)}</div>
+        <div class="dd-grid">
+          ${d.parts.map(p=>`<div class="dd-seg">
+            <div class="dd-lbl">${p.lbl}</div>
+            <span class="dd-icon">${p.icon}</span>
+            <div class="dd-cond">${p.cond}</div>
+            <div class="dd-temp"><span style="color:${tempCol(p.tmax)}">${p.tmax}°</span><span class="dd-min"> / ${p.tmin}°</span></div>
+            <div class="dd-rain">💧 ${p.rain}%${p.rainMm>=0.1?` · ${p.rainMm}mm`:''}${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
+            <div class="dd-wind">🌬 ${p.wind} km/h</div>
+          </div>`).join('')}
+        </div>
+      </div>`).join('')}
+    </div>`;
+}
+function renderAltResult(name,elevation,hours,labelIcon,days){
   const now=hours[0];
-  const [icon,cond]=wmoIcon(now.weatherCode);
+  const rc=reconcileCode(now.weatherCode,now.rain);
+  const [icon,cond]=wmoIcon(rc);
   const showTh=now.thunder>25;
   const fl=now.freezingLevel;
-  const flTxt=(fl!=null&&isFinite(fl))
-    ? (elevation>fl
-        ? `❄️ Nullgradgrenze ${Math.round(fl)} m — auf ${elevation} m voraussichtlich Schnee`
-        : `🌧️ Nullgradgrenze ${Math.round(fl)} m — auf ${elevation} m voraussichtlich Regen`)
+  // Nullgradgrenze nur anzeigen, wenn laut reconcileCode auch tatsächlich Niederschlag ansteht
+  // (dry=Code<=48) — sonst wäre "voraussichtlich Regen/Schnee" bei 0% Regenrisiko irreführend.
+  const dry=rc<=48;
+  const flLine=(!dry&&fl!=null&&isFinite(fl))
+    ? `<div class="alt-fl">${elevation>fl?'❄️':'🌧️'} Nullgradgrenze ${Math.round(fl)} m</div>`
     : '';
   const cells=hours.map((c,i)=>{
     const isNow=i===0;
-    const [ic]=wmoIcon(c.weatherCode);
+    const cRc=reconcileCode(c.weatherCode,c.rain);
+    const [ic]=wmoIcon(cRc);
     const rainTxt=c.rain>0?`💧${c.rain}%`:`<span style="opacity:.3">💧–</span>`;
     const cls=['h-cell',isNow?'h-now':'',c.thunder>40?'h-storm':''].filter(Boolean).join(' ');
     return `<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':c.iso.slice(11,16)}</div><span class="h-icon">${ic}</span><div class="h-temp" style="color:${tempCol(c.temp)}">${c.temp}°</div><div class="h-rain">${rainTxt}</div>${c.rainMm>=0.1?`<div class="h-rain">${c.rainMm}mm</div>`:''}${c.thunder>25?`<div class="h-thunder">⚡${c.thunder}%</div>`:''}</div>`;
@@ -2464,13 +2524,13 @@ function renderAltResult(name,elevation,hours,labelIcon){
   return `
     <div class="alt-peak-label">${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</div>
     <div class="hero-stats" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
-      <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div></div>
+      <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div>${flLine}</div>
       <div class="stat-box"><div class="sv">💧 ${now.rain}%</div><div class="sl">Regen${now.rainMm>=0.1?` · ${now.rainMm}mm`:''}</div></div>
       <div class="${showTh?'stat-box thunder-stat':'stat-box'}"><div class="sv">⚡ ${now.thunder}%</div><div class="sl">Gewitter</div></div>
     </div>
-    ${flTxt?`<div class="dav-badge" style="margin-top:12px">${flTxt}</div>`:''}
     <div class="hourly-scroll" style="padding:14px 0 0"><div class="hourly-inner">${cells}</div></div>
     <div class="alt-note">Modellschätzung (Interpolation zwischen Druckflächen${hours.some(c=>!c.modeled)?', teils Extrapolation mit Standardatmosphäre':''}), keine lokalen Effekte wie Sonnenexposition, Kaltluftseen oder Wind berücksichtigt.</div>
+    ${renderAltDays(days)}
   `;
 }
 
