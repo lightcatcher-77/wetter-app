@@ -1721,6 +1721,10 @@ function radarClassifyPixel(d){
   if(g>140&&b<150)return{level:'mittel',label:'mäßiger Regen'};
   return{level:'leicht',label:'leichter Regen'};
 }
+// Eigenes Icon für alle Radar-Textmeldungen (Flag-Chip, Dauer-Hinweis, "Regen nähert sich"-Box) —
+// bewusst nicht 📡, das ist im Hero schon für die Bright-Sky-Stationsangabe vergeben (siehe
+// cur.station-Zeile); sonst tauchen zwei 📡 gleichzeitig im Hero auf.
+const RADAR_INFO_ICON='📶';
 // Ob der Radar-Punkt-Check gerade Regen am Standort meldet — hält radarCheckIncoming davon ab,
 // zusätzlich zur Flag-Chip noch eine "Regen nähert sich"-Box einzublenden, wenn es laut Radar
 // bereits regnet (sonst zwei sich widersprechende Meldungen gleichzeitig im Hero).
@@ -1732,7 +1736,7 @@ function radarSetFlag(info){
   if(!info){
     if(modelExpectsRain){
       el.style.display='inline-flex';
-      el.textContent='📡 Laut Radar: Kein Regen';
+      el.textContent=`${RADAR_INFO_ICON} Laut Radar: Kein Regen`;
       el.className='radar-flag keins';
     }else{
       el.style.display='none';
@@ -1741,7 +1745,7 @@ function radarSetFlag(info){
     return;
   }
   el.style.display='inline-flex';
-  el.textContent=`📡 Laut Radar: ${info.label}`;
+  el.textContent=`${RADAR_INFO_ICON} Laut Radar: ${info.label}`;
   el.className='radar-flag '+info.level;
 }
 // Lädt ein Radar-Tile für den angegebenen Frame-Index und klassifiziert den Pixel an loc.
@@ -1880,7 +1884,7 @@ const RADAR_RAIN_ICON='☔';
 // noch nicht erfasst hat. Bei erkanntem Blitz laut Blitzdichte-Layer wird das Gewittersymbol
 // statt des Regensymbols gezeigt. Der Hinweis, wie lange der Regen laut Kurzfristprognose noch
 // anhält, wird an die bestehende Radar-Flag-Chip angehängt statt in einem eigenen Element
-// darunter — sonst taucht das 📡-Symbol im Hero doppelt auf (Chip + Dauer-Hinweis).
+// darunter — sonst taucht das Symbol im Hero doppelt auf (Chip + Dauer-Hinweis).
 let radarOverrideSeq=0;
 async function radarApplyOverride(info,loc){
   const iconEl=document.getElementById('big-icon');
@@ -2031,8 +2035,8 @@ async function radarCheckIncoming(){
   if(firstIncomingMin!=null&&firstIncomingMin<=60&&lastHourlyNow.rain<30){
     el.style.display='block';
     el.textContent=firstIncomingMin===0
-      ? `📡 Laut Radar gerade Regen in der Nähe — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`
-      : `📡 Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
+      ? `${RADAR_INFO_ICON} Laut Radar gerade Regen in der Nähe — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`
+      : `${RADAR_INFO_ICON} Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
   }else{
     el.style.display='none';
   }
