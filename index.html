@@ -88,7 +88,6 @@
     .radar-badge.forecast{background:rgba(245,200,66,.12);border-color:rgba(245,200,66,.35);color:var(--accent);}
     .radar-note{font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.5;}
     .radar-incoming{margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(242,153,74,.12);border:1px solid rgba(242,153,74,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5;}
-    .radar-duration{font-size:11px;color:var(--text-dim);margin-top:6px;line-height:1.5;}
     .warning{display:flex;gap:12px;align-items:flex-start;background:rgba(242,153,74,.09);border:1px solid rgba(242,153,74,.25);border-radius:14px;padding:14px 16px;margin-bottom:18px;animation:slideUp .5s;}
     .warning strong{color:var(--orange);}
     .warning p{font-size:13px;color:var(--text-dim);margin-top:3px;line-height:1.6;}
@@ -528,7 +527,6 @@ function render(data){
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
         <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
-        <div class="radar-duration" id="radar-duration" style="display:none"></div>
         <div class="radar-incoming" id="radar-incoming" style="display:none"></div>
       </div>
       <div class="hero-stats">
@@ -1723,7 +1721,12 @@ function radarClassifyPixel(d){
   if(g>140&&b<150)return{level:'mittel',label:'mäßiger Regen'};
   return{level:'leicht',label:'leichter Regen'};
 }
+// Ob der Radar-Punkt-Check gerade Regen am Standort meldet — hält radarCheckIncoming davon ab,
+// zusätzlich zur Flag-Chip noch eine "Regen nähert sich"-Box einzublenden, wenn es laut Radar
+// bereits regnet (sonst zwei sich widersprechende Meldungen gleichzeitig im Hero).
+let radarRainingNow=false;
 function radarSetFlag(info){
+  radarRainingNow=!!info;
   const el=document.getElementById('radar-flag');
   if(!el)return;
   if(!info){
@@ -1839,17 +1842,22 @@ function dwdClassifyThunderNow(loc){
     .then(j=>(j?.features?.[0]?.properties?.GRAY_INDEX||0)>0)
     .catch(()=>false);
 }
-// Wie lange der aktuell laut Radar fallende Regen laut Kurzfristprognose noch anhält. Es wird
-// nicht beim ersten trockenen Zwischenschritt gestoppt: zwei durch eine Lücke getrennte Regen-
-// phasen zählen als eine durchgehende Regenzeit — Rückgabe ist die letzte Minute mit erkanntem
-// Regen, Lücken dazwischen werden also überbrückt. horizonMin ist die geprüfte Zeitspanne, damit
-// der Aufrufer zwischen "hört auf" und "hält mindestens bis Prognoseende an" unterscheiden kann.
+// Wie lange der aktuell laut Radar fallende Regen laut Kurzfristprognose noch anhält. Bewusst
+// punktgenaue Klassifizierung (dwdClassifyPointAtTime/radarClassifyFrameAtLoc, dieselbe Quelle
+// wie das "Jetzt"-Badge) statt der Umkreis-Cluster-Prüfung aus dwdClassifyAreaAtTime/
+// radarClassifyAreaAtLoc — die ist für die Vorwarnung (Regen irgendwo im ~8-10km-Umkreis) gedacht
+// und meldete hier fälschlich "regnet noch", wenn eine Zelle nur in der Nähe lag, aber nicht mehr
+// exakt über dem Standort. Es wird nicht beim ersten trockenen Zwischenschritt gestoppt: zwei
+// durch eine Lücke getrennte Regenphasen zählen als eine durchgehende Regenzeit — Rückgabe ist die
+// letzte Minute mit erkanntem Regen, Lücken dazwischen werden also überbrückt. horizonMin ist die
+// geprüfte Zeitspanne, damit der Aufrufer zwischen "hört auf" und "hält mindestens bis Prognose-
+// ende an" unterscheiden kann.
 async function radarEstimateRainEnd(loc){
   if(inGermany(loc.lat,loc.lon)){
     const steps=[15,30,45,60,75,90,105];
-    const results=await Promise.all(dwdTimeSteps(steps).map(t=>dwdClassifyAreaAtTime(loc,t)));
+    const results=await Promise.all(dwdTimeSteps(steps).map(t=>dwdClassifyPointAtTime(loc,t)));
     let lastRainMin=null;
-    results.forEach((rain,i)=>{ if(rain)lastRainMin=steps[i]; });
+    results.forEach((info,i)=>{ if(info)lastRainMin=steps[i]; });
     return{lastRainMin,horizonMin:steps[steps.length-1]};
   }
   if(radarFrames.length&&radarHost){
@@ -1857,37 +1865,40 @@ async function radarEstimateRainEnd(loc){
     const futureIdxs=[];
     for(let i=radarPastLen;i<radarFrames.length;i++)futureIdxs.push(i);
     if(!futureIdxs.length)return{lastRainMin:null,horizonMin:0};
-    const results=await Promise.all(futureIdxs.map(i=>radarClassifyAreaAtLoc(i,loc)));
+    const results=await Promise.all(futureIdxs.map(i=>radarClassifyFrameAtLoc(i,loc)));
     let lastRainMin=null;
-    results.forEach((rain,idx)=>{ if(rain)lastRainMin=(idx+1)*stepMin; });
+    results.forEach((info,idx)=>{ if(info)lastRainMin=(idx+1)*stepMin; });
     return{lastRainMin,horizonMin:futureIdxs.length*stepMin};
   }
   return{lastRainMin:null,horizonMin:0};
 }
+// Eigenes Icon fürs Radar-Override statt des normalen Regen-Icons (🌧, siehe WMO_MAP) — so ist auf
+// den ersten Blick erkennbar, dass das Symbol vom Radar und nicht vom Modell kommt.
+const RADAR_RAIN_ICON='☔';
 // Überschreibt bei laufendem Radar-Regen das Wettersymbol, falls das Modell noch ein trockenes
 // Icon zeigt (Wolke/Sonne) — Vorwarnstufe für den Fall, dass das Modell einen sichtbaren Schauer
 // noch nicht erfasst hat. Bei erkanntem Blitz laut Blitzdichte-Layer wird das Gewittersymbol
-// statt des Regensymbols gezeigt. Ergänzt außerdem den Hinweis, wie lange der Regen laut
-// Kurzfristprognose noch anhält (siehe radarEstimateRainEnd).
+// statt des Regensymbols gezeigt. Der Hinweis, wie lange der Regen laut Kurzfristprognose noch
+// anhält, wird an die bestehende Radar-Flag-Chip angehängt statt in einem eigenen Element
+// darunter — sonst taucht das 📡-Symbol im Hero doppelt auf (Chip + Dauer-Hinweis).
 let radarOverrideSeq=0;
 async function radarApplyOverride(info,loc){
-  const iconEl=document.getElementById('big-icon'), durEl=document.getElementById('radar-duration');
-  if(!iconEl||!durEl||!lastCur)return;
+  const iconEl=document.getElementById('big-icon');
+  if(!iconEl||!lastCur)return;
   const seq=++radarOverrideSeq;
   if(!info){
     iconEl.textContent=lastCur.icon;
-    durEl.style.display='none';
     return;
   }
   const thunderNow=inGermany(loc.lat,loc.lon)?await dwdClassifyThunderNow(loc):false;
   if(seq!==radarOverrideSeq)return;
-  iconEl.textContent=modelExpectsRain?lastCur.icon:(thunderNow?'⛈':'🌧');
+  iconEl.textContent=modelExpectsRain?lastCur.icon:(thunderNow?'⛈':RADAR_RAIN_ICON);
   const end=await radarEstimateRainEnd(loc);
-  if(seq!==radarOverrideSeq)return;
-  durEl.style.display='block';
-  if(end.lastRainMin==null)durEl.textContent='📡 Laut Radar hört der Regen in Kürze wieder auf.';
-  else if(end.lastRainMin>=end.horizonMin)durEl.textContent=`📡 Laut Radar hält der Regen mindestens noch ${end.lastRainMin} Min. an.`;
-  else durEl.textContent=`📡 Laut Radar hält der Regen noch ca. ${end.lastRainMin} Min. an.`;
+  const flagEl=document.getElementById('radar-flag');
+  if(seq!==radarOverrideSeq||!flagEl)return;
+  if(end.lastRainMin==null)flagEl.textContent+=' · hört gleich wieder auf';
+  else if(end.lastRainMin>=end.horizonMin)flagEl.textContent+=` · hält mind. noch ${end.lastRainMin} Min. an`;
+  else flagEl.textContent+=` · noch ca. ${end.lastRainMin} Min.`;
 }
 function radarSampleAtLocation(){
   // Sampelt bewusst immer den "Jetzt"-Zeitpunkt, unabhängig davon, welchen Zeitpunkt der
@@ -1898,17 +1909,17 @@ function radarSampleAtLocation(){
   const loc=radarLoc, seq=++radarSampleSeq;
   if(radarUsingDwdForLoc()){
     dwdClassifyPointAtTime(loc,dwdTimeSteps()[0]).then(info=>{
-      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);}
+      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);radarCheckIncoming();}
     });
   }else if(radarFrames.length&&radarHost){
     radarClassifyFrameAtLoc(radarPastLen-1,loc).then(info=>{
-      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);}
+      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);radarCheckIncoming();}
     });
   }else{
     radarSetFlag(null);
     radarApplyOverride(null,loc);
+    radarCheckIncoming();
   }
-  radarCheckIncoming();
 }
 // DWD-eigener WMS-Radar (RV-Produkt: Analyse + echte ~2h-Vorhersage, 1km, 5-Min-Raster,
 // nur Deutschland) — präziser & verlässlicher als RainViewers Nowcast, der oft leer ist
@@ -1998,7 +2009,7 @@ let radarIncomingSeq=0;
 async function radarCheckIncoming(){
   const el=document.getElementById('radar-incoming');
   if(!el)return;
-  if(!radarLoc||!lastHourlyNow){
+  if(!radarLoc||!lastHourlyNow||radarRainingNow){
     el.style.display='none';
     return;
   }
