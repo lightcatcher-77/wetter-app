@@ -1776,8 +1776,10 @@ function radarClassifyFrameAtLoc(frameIdx,loc){
 // Analog zu dwdClassifyAreaAtTime, aber für den RainViewer-Fallback außerhalb Deutschlands
 // (radarCheckIncoming): sampelt einen kleinen Block um den Standort statt eines Einzelpixels
 // und verlangt via largestConnectedCluster dieselbe Cluster-Logik — gleiches Rauschfilter-
-// Prinzip, nur an die gröbere Zoom-7-Pixelauflösung (~1.2km/Pixel) angepasst.
-const RV_CLUSTER_MIN_PX=2;
+// Prinzip, nur an die gröbere Zoom-7-Pixelauflösung (~1.2km/Pixel) angepasst. Fenster und
+// Mindestgröße bewusst enger als zuvor (half 4→3, Cluster 2→5px), damit die Vorwarnung erst
+// bei näherer, flächigerer Bewölkung anschlägt statt bei jeder kleinen Zelle im ~10km-Umkreis.
+const RV_CLUSTER_MIN_PX=5;
 function radarClassifyAreaAtLoc(frameIdx,loc){
   return new Promise(resolve=>{
     const frame=radarFrames[frameIdx];
@@ -1793,7 +1795,7 @@ function radarClassifyAreaAtLoc(frameIdx,loc){
         canvas.width=256;canvas.height=256;
         const ctx=canvas.getContext('2d');
         ctx.drawImage(img,0,0);
-        const half=4;
+        const half=3;
         const x0=Math.max(0,px-half), y0=Math.max(0,py-half);
         const x1=Math.min(255,px+half), y1=Math.min(255,py+half);
         const d=ctx.getImageData(x0,y0,x1-x0+1,y1-y0+1).data;
@@ -1805,7 +1807,7 @@ function radarClassifyAreaAtLoc(frameIdx,loc){
   });
 }
 // Eng um den Punkt geschnittene Bbox fürs GetFeatureInfo unten — bewusst viel kleiner als
-// dwdBbox() (die deckt ~8-10km für die Umkreis-Vorwarnung ab). Bei 3x3 Pixeln über ~1.5-2km
+// dwdBbox() (die deckt ~6km für die Umkreis-Vorwarnung ab). Bei 3x3 Pixeln über ~1.5-2km
 // Kantenlänge liegt die Mitte (x=1,y=1) nah am nativen 1km-Raster des DWD-Produkts; mit der
 // breiten dwdBbox gemittelt worden wäre die Auflösung auf mehrere km verwässert.
 function dwdPointBbox(loc){
@@ -1928,11 +1930,13 @@ function radarSampleAtLocation(){
 // DWD-eigener WMS-Radar (RV-Produkt: Analyse + echte ~2h-Vorhersage, 1km, 5-Min-Raster,
 // nur Deutschland) — präziser & verlässlicher als RainViewers Nowcast, der oft leer ist
 // (per Live-Test bestätigt: RainViewer lieferte 0 Nowcast-Frames, während der DWD-Layer
-// zum selben Zeitpunkt plausible Vorhersagedaten hatte). Statt eines Einzelpixels wird
-// eine kleine Bbox (~8-10km) um den Standort abgefragt, damit eine nahe, aber noch nicht
-// exakt über dem Standort liegende Regenzelle nicht übersehen wird.
+// zum selben Zeitpunkt plausible Vorhersagedaten hatte). Statt eines Einzelpixels wird eine
+// kleine Bbox (~6km, bewusst enger als zuvor ~11km) um den Standort abgefragt, damit eine
+// nahe, aber noch nicht exakt über dem Standort liegende Regenzelle nicht übersehen wird —
+// die Vorwarnung soll aber erst bei wirklich naher Bewölkung anschlagen, nicht bei jeder
+// Zelle irgendwo im weiteren Umkreis.
 function dwdBbox(loc){
-  const dLat=0.05, dLon=0.08;
+  const dLat=0.03, dLon=0.045;
   return `${loc.lon-dLon},${loc.lat-dLat},${loc.lon+dLon},${loc.lat+dLat}`;
 }
 // 4-Nachbarschafts-Flood-Fill über die Alpha-Maske: liefert die Größe der größten zusammen-
@@ -1965,10 +1969,10 @@ function largestConnectedCluster(data,w,h,alphaThresh){
   }
   return best;
 }
-// Mindestgröße der zusammenhängenden Fläche im 50×50-Sample (~11×11km Bbox, ~0.22km/Pixel) —
-// deckt mehr als eine isolierte 1km-DWD-Zelle ab, ohne echte kleine Schauerzellen komplett
-// rauszufiltern.
-const DWD_CLUSTER_MIN_PX=10;
+// Mindestgröße der zusammenhängenden Fläche im 50×50-Sample (~6×6km Bbox, ~0.12km/Pixel) —
+// deutlich höher als die ursprünglichen 10px: die Vorwarnung soll erst bei einer wirklich
+// flächigen Regenzelle in der Nähe anschlagen, nicht schon bei einer isolierten kleinen Zelle.
+const DWD_CLUSTER_MIN_PX=30;
 function dwdClassifyAreaAtTime(loc,isoTime){
   return new Promise(resolve=>{
     const url='https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.1.1&request=GetMap'+
