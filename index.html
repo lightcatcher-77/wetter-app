@@ -88,6 +88,7 @@
     .radar-badge.forecast{background:rgba(245,200,66,.12);border-color:rgba(245,200,66,.35);color:var(--accent);}
     .radar-note{font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.5;}
     .radar-incoming{margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(242,153,74,.12);border:1px solid rgba(242,153,74,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5;}
+    .radar-duration{font-size:11px;color:var(--text-dim);margin-top:6px;line-height:1.5;}
     .warning{display:flex;gap:12px;align-items:flex-start;background:rgba(242,153,74,.09);border:1px solid rgba(242,153,74,.25);border-radius:14px;padding:14px 16px;margin-bottom:18px;animation:slideUp .5s;}
     .warning strong{color:var(--orange);}
     .warning p{font-size:13px;color:var(--text-dim);margin-top:3px;line-height:1.6;}
@@ -480,12 +481,13 @@ function toggleHourDetail(){
   document.querySelectorAll('.h-detail').forEach(el=>{el.hidden=!hourDetailsOpen;});
 }
 
-let chartInst=null,lastFc=[],selDay=-1,lastHourlyNow=null,renderSeq=0;
+let chartInst=null,lastFc=[],selDay=-1,lastHourlyNow=null,renderSeq=0,lastCur=null;
 function render(data){
   if(chartInst){chartInst.destroy();chartInst=null;}
   selDay=-1;
   const mySeq=++renderSeq;
   const cur=data.current,m=data.meta;
+  lastCur=cur;
   modelExpectsRain=isRainCode(cur.weatherCode);
   // Für den Radar-Nowcast-Abgleich (radarCheckIncoming): Konsens-Regenwert der aktuell
   // angezeigten "Jetzt"-Stunde, unabhängig davon ob/wann das Radar fertig geladen ist.
@@ -520,12 +522,13 @@ function render(data){
     ${showWarn?`<div class="warning ${warnSev}"><div style="font-size:22px;line-height:1">⛈</div><div><strong>${esc(data.warning.title)}</strong><p>${esc(data.warning.text)}</p></div></div>`:''}
     <div class="hero">
       <div class="card hero-main">
-        <span class="big-icon">${cur.icon}</span>
+        <span class="big-icon" id="big-icon">${cur.icon}</span>
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
         <div class="condition">${cur.condition}</div>
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
         <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
+        <div class="radar-duration" id="radar-duration" style="display:none"></div>
         <div class="radar-incoming" id="radar-incoming" style="display:none"></div>
       </div>
       <div class="hero-stats">
@@ -1819,6 +1822,73 @@ function dwdClassifyPointAtTime(loc,isoTime){
       return{level:'leicht',label:'leichter Regen'};
     }).catch(()=>null);
 }
+// Blitzdichte-Punktabfrage für den "Jetzt"-Gewitterabgleich (analog zu dwdClassifyPointAtTime,
+// aber auf dem Blitzdichte- statt dem Niederschlagslayer, siehe DWD_THUNDER_LAYER weiter unten).
+// GRAY_INDEX>0 heißt: laut Layer-Beschreibung wurden in den letzten 15 Minuten am Standort Blitze
+// erkannt. Sicherheitsabstand wie DWD_PUBLISH_LAG_MIN: das Blitzprodukt lag im Live-Test ~5-6 Min.
+// hinter der Rain-Analyse zurück, eine exakte "Jetzt"-Anfrage schlägt sonst oft fehl (Fehlerfall
+// wird über .catch(()=>false) toleriert, dann bleibt die Gewitter-Erkennung für diesen Zyklus aus).
+function dwdClassifyThunderNow(loc){
+  const now=new Date();
+  now.setUTCSeconds(0,0);
+  now.setUTCMinutes(Math.floor(now.getUTCMinutes()/5)*5-DWD_PUBLISH_LAG_MIN);
+  return fetch('https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.1.1&request=GetFeatureInfo'+
+    '&layers='+DWD_THUNDER_LAYER+'&query_layers='+DWD_THUNDER_LAYER+'&styles=&bbox='+dwdPointBbox(loc)+
+    '&width=3&height=3&srs=EPSG:4326&x=1&y=1&info_format=application/json&feature_count=1&time='+now.toISOString())
+    .then(r=>r.ok?r.json():null)
+    .then(j=>(j?.features?.[0]?.properties?.GRAY_INDEX||0)>0)
+    .catch(()=>false);
+}
+// Wie lange der aktuell laut Radar fallende Regen laut Kurzfristprognose noch anhält. Es wird
+// nicht beim ersten trockenen Zwischenschritt gestoppt: zwei durch eine Lücke getrennte Regen-
+// phasen zählen als eine durchgehende Regenzeit — Rückgabe ist die letzte Minute mit erkanntem
+// Regen, Lücken dazwischen werden also überbrückt. horizonMin ist die geprüfte Zeitspanne, damit
+// der Aufrufer zwischen "hört auf" und "hält mindestens bis Prognoseende an" unterscheiden kann.
+async function radarEstimateRainEnd(loc){
+  if(inGermany(loc.lat,loc.lon)){
+    const steps=[15,30,45,60,75,90,105];
+    const results=await Promise.all(dwdTimeSteps(steps).map(t=>dwdClassifyAreaAtTime(loc,t)));
+    let lastRainMin=null;
+    results.forEach((rain,i)=>{ if(rain)lastRainMin=steps[i]; });
+    return{lastRainMin,horizonMin:steps[steps.length-1]};
+  }
+  if(radarFrames.length&&radarHost){
+    const stepMin=radarFrameStepMin();
+    const futureIdxs=[];
+    for(let i=radarPastLen;i<radarFrames.length;i++)futureIdxs.push(i);
+    if(!futureIdxs.length)return{lastRainMin:null,horizonMin:0};
+    const results=await Promise.all(futureIdxs.map(i=>radarClassifyAreaAtLoc(i,loc)));
+    let lastRainMin=null;
+    results.forEach((rain,idx)=>{ if(rain)lastRainMin=(idx+1)*stepMin; });
+    return{lastRainMin,horizonMin:futureIdxs.length*stepMin};
+  }
+  return{lastRainMin:null,horizonMin:0};
+}
+// Überschreibt bei laufendem Radar-Regen das Wettersymbol, falls das Modell noch ein trockenes
+// Icon zeigt (Wolke/Sonne) — Vorwarnstufe für den Fall, dass das Modell einen sichtbaren Schauer
+// noch nicht erfasst hat. Bei erkanntem Blitz laut Blitzdichte-Layer wird das Gewittersymbol
+// statt des Regensymbols gezeigt. Ergänzt außerdem den Hinweis, wie lange der Regen laut
+// Kurzfristprognose noch anhält (siehe radarEstimateRainEnd).
+let radarOverrideSeq=0;
+async function radarApplyOverride(info,loc){
+  const iconEl=document.getElementById('big-icon'), durEl=document.getElementById('radar-duration');
+  if(!iconEl||!durEl||!lastCur)return;
+  const seq=++radarOverrideSeq;
+  if(!info){
+    iconEl.textContent=lastCur.icon;
+    durEl.style.display='none';
+    return;
+  }
+  const thunderNow=inGermany(loc.lat,loc.lon)?await dwdClassifyThunderNow(loc):false;
+  if(seq!==radarOverrideSeq)return;
+  iconEl.textContent=modelExpectsRain?lastCur.icon:(thunderNow?'⛈':'🌧');
+  const end=await radarEstimateRainEnd(loc);
+  if(seq!==radarOverrideSeq)return;
+  durEl.style.display='block';
+  if(end.lastRainMin==null)durEl.textContent='📡 Laut Radar hört der Regen in Kürze wieder auf.';
+  else if(end.lastRainMin>=end.horizonMin)durEl.textContent=`📡 Laut Radar hält der Regen mindestens noch ${end.lastRainMin} Min. an.`;
+  else durEl.textContent=`📡 Laut Radar hält der Regen noch ca. ${end.lastRainMin} Min. an.`;
+}
 function radarSampleAtLocation(){
   // Sampelt bewusst immer den "Jetzt"-Zeitpunkt, unabhängig davon, welchen Zeitpunkt der
   // Slider gerade anzeigt — das Badge im aktuellen Wetterstatus soll nicht durch Zurückspulen
@@ -1828,14 +1898,15 @@ function radarSampleAtLocation(){
   const loc=radarLoc, seq=++radarSampleSeq;
   if(radarUsingDwdForLoc()){
     dwdClassifyPointAtTime(loc,dwdTimeSteps()[0]).then(info=>{
-      if(seq===radarSampleSeq)radarSetFlag(info);
+      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);}
     });
   }else if(radarFrames.length&&radarHost){
     radarClassifyFrameAtLoc(radarPastLen-1,loc).then(info=>{
-      if(seq===radarSampleSeq)radarSetFlag(info);
+      if(seq===radarSampleSeq){radarSetFlag(info);radarApplyOverride(info,loc);}
     });
   }else{
     radarSetFlag(null);
+    radarApplyOverride(null,loc);
   }
   radarCheckIncoming();
 }
@@ -1904,12 +1975,13 @@ function dwdClassifyAreaAtTime(loc,isoTime){
     img.src=url;
   });
 }
-// Zeitschritte 0/15/30/45/60 Min., auf das 5-Minuten-Raster der DWD-Zeitdimension abgerundet.
-function dwdTimeSteps(){
+// Zeitschritte (Standard 0/15/30/45/60 Min.), auf das 5-Minuten-Raster der DWD-Zeitdimension
+// abgerundet. minutesList erlaubt anderen Aufrufern (radarEstimateRainEnd) einen weiteren Horizont.
+function dwdTimeSteps(minutesList){
   const now=new Date();
   now.setUTCSeconds(0,0);
   now.setUTCMinutes(Math.floor(now.getUTCMinutes()/5)*5);
-  return [0,15,30,45,60].map(m=>new Date(now.getTime()+m*60000).toISOString());
+  return (minutesList||[0,15,30,45,60]).map(m=>new Date(now.getTime()+m*60000).toISOString());
 }
 async function dwdRadarCheckIncoming(loc){
   const results=await Promise.all(dwdTimeSteps().map(t=>dwdClassifyAreaAtTime(loc,t)));
