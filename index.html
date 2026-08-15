@@ -261,6 +261,7 @@
         <input type="range" id="radar-slider" min="0" max="0" value="0" oninput="radarSeek(this.value)">
         <div class="radar-ticks" id="radar-ticks"></div>
       </div>
+      <button class="radar-btn" id="radar-locate" onclick="radarJumpToLocation()" title="Zum ausgewählten Standort springen">📍</button>
     </div>
     <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
   </div>
@@ -1685,6 +1686,10 @@ function radarSetCenter(lat,lon){
   radarLoc={lat,lon};
   refreshRainDisplay();
   radarSampleAtLocation();
+}
+function radarJumpToLocation(){
+  if(!shownLoc)return;
+  radarSetCenter(shownLoc.lat,shownLoc.lon);
 }
 function radarTileCoords(lat,lon,z){
   const n=Math.pow(2,z);
