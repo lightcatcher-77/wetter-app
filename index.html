@@ -73,6 +73,8 @@
     .radar-time-big.loading{opacity:.45;}
     .radar-controls{display:flex;align-items:flex-start;gap:10px;margin-top:6px;}
     .radar-btn{flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .radar-btn.thunder-btn{color:var(--text-dim);}
+    .radar-btn.thunder-btn.active{background:rgba(245,200,66,.18);border-color:rgba(245,200,66,.45);color:var(--accent);}
     .radar-slider-wrap{position:relative;flex:1;padding-bottom:16px;padding-top:5px;}
     .radar-slider-wrap input[type=range]{width:100%;display:block;accent-color:var(--accent);position:relative;z-index:2;}
     .radar-ticks{position:absolute;left:8px;right:8px;top:20px;height:14px;pointer-events:none;}
@@ -252,7 +254,6 @@
     <div class="radar-tabs" role="tablist">
       <button class="radar-tab active" id="radar-tab-rain" role="tab" aria-selected="true" onclick="radarSwitchMode('rain')">🌧️ Regen</button>
       <button class="radar-tab" id="radar-tab-sat" role="tab" aria-selected="false" onclick="radarSwitchMode('sat')">☁️ Wolken</button>
-      <button class="radar-tab" id="radar-tab-thunder" role="tab" aria-selected="false" onclick="radarSwitchMode('thunder')">⚡ Blitze</button>
     </div>
     <div id="radar-map"></div>
     <div class="radar-time-big" id="radar-time">Lädt…</div>
@@ -262,6 +263,7 @@
         <input type="range" id="radar-slider" min="0" max="0" value="0" oninput="radarSeek(this.value)">
         <div class="radar-ticks" id="radar-ticks"></div>
       </div>
+      <button class="radar-btn thunder-btn" id="radar-thunder-toggle" onclick="radarToggleThunder()" title="Blitze über das Regenradar legen" aria-pressed="false">⚡</button>
     </div>
     <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
   </div>
@@ -1339,11 +1341,11 @@ function inGermany(lat,lon){ return lat>=47.2&&lat<=55.1&&lon>=5.8&&lon<=15.1; }
 let radarMap=null, radarMarker=null;
 let radarCanvas=null;     // Canvas-Overlay für die Einzelbild-Quellen (DWD-Regen, Satellit)
 let radarTiles=null;      // Kachel-Layer für den RainViewer-Fallback außerhalb Deutschlands
-let radarMode='rain'; // 'rain' | 'sat' | 'thunder' — steuert nur, welcher Layer/Tab im Kartenbereich aktiv ist
+let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Kartenbereich aktiv ist
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
 let satFrames=[]; // {time} — synthetisiert, RainViewer liefert hierfür keine Frame-Liste
-let thunderFrames=[]; // {time,iso} — Ausschnitt aus dwdFrames (nur Vergangenheit, DWD liefert keine Blitz-Prognose)
 let radarLoc=null, radarSampleSeq=0;
+let radarThunderOn=false; // Blitzdichte-Overlay über dem Regen-Tab, unabhängig vom Tab-Umschalter
 // DWD-WMS-Zeitkacheln für die sichtbare Regenradar-Karte bei deutschen Standorten (echte
 // ~2h-Prognose statt RainViewers oft leerem Nowcast) — RainViewer bleibt für Badge/Vorwarnungs-
 // Fallback/Wolkenradar weiterhin im Hintergrund aktiv, siehe fetchRadarFrames().
@@ -1355,12 +1357,10 @@ let dwdFrames=[], dwdPastLen=0;
 function radarUsingDwdForLoc(){ return !!radarLoc && inGermany(radarLoc.lat,radarLoc.lon); }
 function activeFrames(){
   if(radarMode==='sat')return satFrames;
-  if(radarMode==='thunder')return thunderFrames;
   return radarUsingDwdForLoc()?dwdFrames:radarFrames;
 }
 function activePastLen(){
   if(radarMode==='sat')return satFrames.length;
-  if(radarMode==='thunder')return thunderFrames.length;
   return radarUsingDwdForLoc()?dwdPastLen:radarPastLen;
 }
 function buildDwdFrames(){
@@ -1532,15 +1532,13 @@ function radarPrioritize(center){
 }
 // Trifft die Anzeige auf eine Einzelbild-Quelle (DWD-Regen oder Satellit) oder auf die
 // RainViewer-Kacheln?
-function radarOverlayMode(){ return radarMode==='sat'||radarMode==='thunder'||radarUsingDwdForLoc(); }
+function radarOverlayMode(){ return radarMode==='sat'||radarUsingDwdForLoc(); }
 function radarFrameIso(frame){
   return frame.iso||new Date(frame.time*1000).toISOString().replace(/\.\d{3}Z$/,'Z');
 }
 function radarOverlayUrl(frame){
   const iso=radarFrameIso(frame);
-  if(radarMode==='sat')return satOverlayUrl(iso);
-  if(radarMode==='thunder')return thunderOverlayUrl(iso);
-  return dwdOverlayUrl(iso);
+  return radarMode==='sat'?satOverlayUrl(iso):dwdOverlayUrl(iso);
 }
 function radarPrefetchFrames(){
   if(!radarMap||!radarOverlayMode()||!radarEnsureView())return;
@@ -1623,7 +1621,7 @@ function radarShowOverlayFrame(i){
   const frame=activeFrames()[i];
   if(!frame)return;
   radarEnsureView();
-  radarEnsureCanvas(radarMode==='sat'?.85:radarMode==='thunder'?.9:.75);
+  radarEnsureCanvas(radarMode==='sat'?.85:.75);
   const url=radarOverlayUrl(frame);
   radarWantedUrl=url;
   const cached=radarImgCache.get(url);
@@ -2026,6 +2024,7 @@ function radarRenderFrame(i){
   badge.classList.toggle('forecast',isForecast);
   if(radarOverlayMode())radarShowOverlayFrame(i);
   else radarShowTileFrame(frame);
+  radarSyncThunderOverlay(i);
 }
 // Kein Debounce mehr vor dem Rendern: bereits geladene Frames werden direkt aus dem Speicher
 // gezeichnet, das ist billiger als das alte Warten und folgt dem Slider ohne Nachlauf. Die
@@ -2059,16 +2058,17 @@ function radarSwitchMode(mode){
   document.getElementById('radar-tab-rain').setAttribute('aria-selected',mode==='rain');
   document.getElementById('radar-tab-sat').classList.toggle('active',mode==='sat');
   document.getElementById('radar-tab-sat').setAttribute('aria-selected',mode==='sat');
-  document.getElementById('radar-tab-thunder').classList.toggle('active',mode==='thunder');
-  document.getElementById('radar-tab-thunder').setAttribute('aria-selected',mode==='thunder');
-  document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':mode==='sat'?'☁️ Wolkenradar':'⚡ Blitzradar';
+  document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':'☁️ Wolkenradar';
+  document.getElementById('radar-thunder-toggle').style.display=mode==='rain'?'':'none';
   if(mode==='rain'){
     refreshRainDisplay();
     // Frames erst holen, wenn wirklich noch keine da sind — sonst reicht refreshRainDisplay
     // und der Tabwechsel kommt ohne Netzwerk-Roundtrip aus.
     if(!radarUsingDwdForLoc()&&!radarFrames.length)fetchRadarFrames();
-  }else if(mode==='sat')fetchSatFrames();
-  else fetchThunderFrames();
+  }else{
+    radarSyncThunderOverlay(radarIndex);
+    fetchSatFrames();
+  }
 }
 // Exakt dieselbe Zeitachse wie das Regenradar (gleiche Zeitpunkte, gleiche Taktung) —
 // nur der Vergangenheits-Teil, Satellit liefert keine Prognose. So verhalten sich Ticks,
@@ -2101,23 +2101,6 @@ function fetchSatFrames(){
   // Netzwerk läuft (siehe Frame-Engine oben).
   radarPrefetchFrames();
 }
-// Blitzdichte-Tab: nutzt dieselbe DWD-Zeitachse wie der Regen-Tab (buildDwdFrames), aber nur
-// den Vergangenheits-Teil — der DWD liefert für Blitze keine Prognose, nur die letzten ~15 Min.
-// pro 5-Min-Schritt (NowCastMIX). Deckt wie der DWD-Regenradar nur Deutschland (+Rand) ab.
-function fetchThunderFrames(){
-  if(!radarMap)return;
-  if(!radarViewCovers())radarNewView();
-  buildDwdFrames();
-  thunderFrames=dwdFrames.slice(0,dwdPastLen);
-  radarIndex=thunderFrames.length-1;
-  const slider=document.getElementById('radar-slider');
-  slider.max=thunderFrames.length-1;
-  slider.value=radarIndex;
-  radarBuildTicks();
-  radarRenderFrame(radarIndex);
-  document.getElementById('radar-note').textContent='Blitzdichte aus NowCastMIX (DWD, 5-Min-Raster, nur Deutschland). Zeigt Blitze der letzten ~15 Min., keine Prognose.';
-  radarPrefetchFrames();
-}
 // ── Satelliten-Abgleich für "Jetzt" (dieselbe EUMETSAT-Quelle wie oben) ──────
 // Einzelbild-Overlay statt Kachelraster fürs DWD-Regenradar — analog zu satOverlayUrl unten.
 // Ein großer GetMap-Request pro Frame statt mehrerer Kachel-Requests; die Bbox kommt aus der
@@ -2131,6 +2114,49 @@ const DWD_THUNDER_LAYER='dwd:Blitzdichte';
 function thunderOverlayUrl(iso){
   const v=radarEnsureView();
   return `${DWD_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=${DWD_THUNDER_LAYER}&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${v.bbox}&width=${v.w}&height=${v.h}&time=${encodeURIComponent(iso)}`;
+}
+// Blitzdichte-Overlay über dem Regenradar: eigene Canvas-Ebene über radarCanvas (höherer
+// zIndex), unabhängig ein-/ausblendbar per Toggle. Läuft über denselben Zeitindex wie der
+// Regen-Frame (dwdFrames liefert für Regen und Blitze dieselben 5-Min-Zeitstempel) — nur im
+// Regen-Tab und nur für deutsche Standorte relevant; für Prognose-Frames (i>=dwdPastLen) gibt
+// es keine Blitzdaten, der DWD liefert dafür keine Vorhersage.
+let radarThunderCanvas=null, radarThunderCanvasView=null, radarThunderWantedUrl=null, radarThunderWantTimer=null;
+function radarToggleThunder(){
+  radarThunderOn=!radarThunderOn;
+  const btn=document.getElementById('radar-thunder-toggle');
+  btn.classList.toggle('active',radarThunderOn);
+  btn.setAttribute('aria-pressed',String(radarThunderOn));
+  radarSyncThunderOverlay(radarIndex);
+}
+function radarSyncThunderOverlay(i){
+  const show=radarThunderOn&&radarMode==='rain'&&radarUsingDwdForLoc()&&i<dwdPastLen;
+  if(!show){
+    radarThunderWantedUrl=null;
+    if(radarThunderCanvas){radarMap.removeLayer(radarThunderCanvas);radarThunderCanvas=null;radarThunderCanvasView=null;}
+    return;
+  }
+  const view=radarEnsureView();
+  if(!radarThunderCanvas){
+    radarThunderCanvas=new (radarCanvasClass())('',view.bounds,{opacity:.85,zIndex:410});
+    radarThunderCanvas.addTo(radarMap);
+    radarThunderCanvasView=view;
+  }
+  const url=thunderOverlayUrl(radarFrameIso(dwdFrames[i]));
+  radarThunderWantedUrl=url;
+  const paint=e=>{
+    if(!radarThunderCanvas||!e.img)return;
+    if(e.view&&radarThunderCanvasView!==e.view){radarThunderCanvas.setBounds(e.view.bounds);radarThunderCanvasView=e.view;}
+    radarThunderCanvas.drawFrame(e.img);
+  };
+  const cached=radarImgCache.get(url);
+  if(cached&&cached.state==='ok'&&cached.img){paint(cached);return;}
+  // Dasselbe Scrub-Debounce wie beim Hauptlayer (radarShowOverlayFrame): sonst löst jede
+  // Zwischenposition beim Ziehen des Sliders einen eigenen WMS-Request aus.
+  clearTimeout(radarThunderWantTimer);
+  radarThunderWantTimer=setTimeout(()=>{
+    if(radarThunderWantedUrl!==url)return;
+    radarImgLoad(url,1,e=>{ if(radarThunderWantedUrl===e.url)paint(e); });
+  },70);
 }
 const EUMETSAT_WMS='https://view.eumetsat.int/geoserver/wms';
 // Einzelbild-Overlay statt Kachelraster: EUMETSATs WMS rendert on-the-fly (kein CDN wie
