@@ -73,8 +73,6 @@
     .radar-time-big.loading{opacity:.45;}
     .radar-controls{display:flex;align-items:flex-start;gap:10px;margin-top:6px;}
     .radar-btn{flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-    .radar-btn.thunder-btn{color:var(--text-dim);}
-    .radar-btn.thunder-btn.active{background:rgba(245,200,66,.18);border-color:rgba(245,200,66,.45);color:var(--accent);}
     .radar-slider-wrap{position:relative;flex:1;padding-bottom:16px;padding-top:5px;}
     .radar-slider-wrap input[type=range]{width:100%;display:block;accent-color:var(--accent);position:relative;z-index:2;}
     .radar-ticks{position:absolute;left:8px;right:8px;top:20px;height:14px;pointer-events:none;}
@@ -263,7 +261,6 @@
         <input type="range" id="radar-slider" min="0" max="0" value="0" oninput="radarSeek(this.value)">
         <div class="radar-ticks" id="radar-ticks"></div>
       </div>
-      <button class="radar-btn thunder-btn" id="radar-thunder-toggle" onclick="radarToggleThunder()" title="Blitze über das Regenradar legen" aria-pressed="false">⚡</button>
     </div>
     <div class="radar-note" id="radar-note">Vergangene ~2 Std. (RainViewer). Eine Kurzfrist-Prognose ist kein garantierter Teil der kostenlosen API und wird nur angezeigt, wenn RainViewer gerade welche berechnet hat.</div>
   </div>
@@ -1345,7 +1342,6 @@ let radarMode='rain'; // 'rain' | 'sat' — steuert nur, welcher Layer/Tab im Ka
 let radarFrames=[], radarPastLen=0, radarIndex=0, radarPlaying=false, radarTimer=null, radarHost='';
 let satFrames=[]; // {time} — synthetisiert, RainViewer liefert hierfür keine Frame-Liste
 let radarLoc=null, radarSampleSeq=0;
-let radarThunderOn=false; // Blitzdichte-Overlay über dem Regen-Tab, unabhängig vom Tab-Umschalter
 // DWD-WMS-Zeitkacheln für die sichtbare Regenradar-Karte bei deutschen Standorten (echte
 // ~2h-Prognose statt RainViewers oft leerem Nowcast) — RainViewer bleibt für Badge/Vorwarnungs-
 // Fallback/Wolkenradar weiterhin im Hintergrund aktiv, siehe fetchRadarFrames().
@@ -2059,7 +2055,6 @@ function radarSwitchMode(mode){
   document.getElementById('radar-tab-sat').classList.toggle('active',mode==='sat');
   document.getElementById('radar-tab-sat').setAttribute('aria-selected',mode==='sat');
   document.getElementById('radar-title').textContent=mode==='rain'?'🌧️ Regenradar':'☁️ Wolkenradar';
-  document.getElementById('radar-thunder-toggle').style.display=mode==='rain'?'':'none';
   if(mode==='rain'){
     refreshRainDisplay();
     // Frames erst holen, wenn wirklich noch keine da sind — sonst reicht refreshRainDisplay
@@ -2116,20 +2111,18 @@ function thunderOverlayUrl(iso){
   return `${DWD_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=${DWD_THUNDER_LAYER}&styles=&format=image/png&transparent=true&crs=CRS:84&bbox=${v.bbox}&width=${v.w}&height=${v.h}&time=${encodeURIComponent(iso)}`;
 }
 // Blitzdichte-Overlay über dem Regenradar: eigene Canvas-Ebene über radarCanvas (höherer
-// zIndex), unabhängig ein-/ausblendbar per Toggle. Läuft über denselben Zeitindex wie der
+// zIndex), immer eingeblendet, kein Toggle nötig. Läuft über denselben Zeitindex wie der
 // Regen-Frame (dwdFrames liefert für Regen und Blitze dieselben 5-Min-Zeitstempel) — nur im
 // Regen-Tab und nur für deutsche Standorte relevant; für Prognose-Frames (i>=dwdPastLen) gibt
 // es keine Blitzdaten, der DWD liefert dafür keine Vorhersage.
+// Eigener Filter statt der DWD-Originalfarben: die Blitzdichte-Skala (grün→gelb→rot→lila)
+// überschneidet sich stark mit der Regen-Farbskala und ginge sonst im Regen-Layer unter. Der
+// dunkle Schlagschatten zeichnet einen Rand um jede Zelle, der sie von jeder Regenfarbe darunter
+// abhebt, saturate/contrast machen die Blitzfarben selbst kräftiger.
+const RADAR_THUNDER_FILTER='saturate(2) contrast(1.35) drop-shadow(0 0 3px rgba(0,0,0,.85))';
 let radarThunderCanvas=null, radarThunderCanvasView=null, radarThunderWantedUrl=null, radarThunderWantTimer=null;
-function radarToggleThunder(){
-  radarThunderOn=!radarThunderOn;
-  const btn=document.getElementById('radar-thunder-toggle');
-  btn.classList.toggle('active',radarThunderOn);
-  btn.setAttribute('aria-pressed',String(radarThunderOn));
-  radarSyncThunderOverlay(radarIndex);
-}
 function radarSyncThunderOverlay(i){
-  const show=radarThunderOn&&radarMode==='rain'&&radarUsingDwdForLoc()&&i<dwdPastLen;
+  const show=radarMode==='rain'&&radarUsingDwdForLoc()&&i<dwdPastLen;
   if(!show){
     radarThunderWantedUrl=null;
     if(radarThunderCanvas){radarMap.removeLayer(radarThunderCanvas);radarThunderCanvas=null;radarThunderCanvasView=null;}
@@ -2140,6 +2133,7 @@ function radarSyncThunderOverlay(i){
     radarThunderCanvas=new (radarCanvasClass())('',view.bounds,{opacity:.85,zIndex:410});
     radarThunderCanvas.addTo(radarMap);
     radarThunderCanvasView=view;
+    radarThunderCanvas._image.style.filter=RADAR_THUNDER_FILTER;
   }
   const url=thunderOverlayUrl(radarFrameIso(dwdFrames[i]));
   radarThunderWantedUrl=url;
