@@ -1,5 +1,11 @@
 # wetter-app
 
+## Programmierregeln
+
+- Für jede Code-Änderung gilt der Skill `.claude/skills/karpathy-rules/SKILL.md`
+  (Karpathys pragmatische Engineering-Prinzipien: erst denken, minimal & chirurgisch
+  ändern, keine verfrühten Abstraktionen, "fertig" vorher definieren und verifizieren).
+
 ## Deploy — alles kommt direkt auf `main`
 
 - Die Live-App läuft auf **GitHub Pages aus `main` (Repo-Root)**: kein Deploy-Workflow,
