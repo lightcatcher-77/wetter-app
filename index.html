@@ -1350,6 +1350,12 @@ const DWD_WMS='https://maps.dwd.de/geoserver/dwd/wms';
 const DWD_LAYER='dwd:Radar_rv_product_1x1km_ger';
 const DWD_STEP_MIN=5;
 const DWD_PAST_MIN=120, DWD_FUTURE_MIN=120;
+// Der jüngste Vorhersage-Zyklus braucht ein paar Minuten Produktionszeit beim DWD, bevor er im
+// WMS abrufbar ist (live geprüft: um :52 war der :50-Zyklus — und damit die Zeit "jetzt+120" —
+// noch nicht da, erst um :54 doch). Ohne Marge fragt der äußerste +120-Min-Frame regelmäßig eine
+// Zeit an, die es serverseitig noch gar nicht gibt (ServiceException statt Bild) und blieb dann
+// im "Lädt…"-Zustand hängen. Der äußerste Frame wird deshalb um eine Taktlänge zurückgenommen.
+const DWD_PUBLISH_LAG_MIN=5;
 let dwdFrames=[], dwdPastLen=0;
 function radarUsingDwdForLoc(){ return !!radarLoc && inGermany(radarLoc.lat,radarLoc.lon); }
 function activeFrames(){
@@ -1365,7 +1371,7 @@ function buildDwdFrames(){
   now.setUTCSeconds(0,0);
   now.setUTCMinutes(Math.floor(now.getUTCMinutes()/DWD_STEP_MIN)*DWD_STEP_MIN);
   const steps=[];
-  for(let m=-DWD_PAST_MIN;m<=DWD_FUTURE_MIN;m+=DWD_STEP_MIN)steps.push(m);
+  for(let m=-DWD_PAST_MIN;m<=DWD_FUTURE_MIN-DWD_PUBLISH_LAG_MIN;m+=DWD_STEP_MIN)steps.push(m);
   dwdFrames=steps.map(m=>{
     const t=new Date(now.getTime()+m*60000);
     return{time:Math.floor(t.getTime()/1000),iso:t.toISOString()};
@@ -1514,7 +1520,16 @@ function radarPump(){
       cbs.forEach(f=>f(e));
       radarPump();
     };
-    img.onerror=()=>{done();e.state='err';e.cbs=[];radarPump();};
+    img.onerror=()=>{
+      done();
+      e.state='err';
+      // Callbacks auch bei Fehlern aufrufen (nicht nur bei Erfolg): radarPaint() schaltet
+      // darüber den Ladezustand ab. Ohne das blieb der Frame nach einem Fehlschlag (z. B. eine
+      // noch nicht vom DWD veröffentlichte Vorhersagezeit) dauerhaft im "Lädt…"-Zustand hängen.
+      const cbs=e.cbs;e.cbs=[];
+      cbs.forEach(f=>f(e));
+      radarPump();
+    };
     img.src=e.url;
   }
 }
