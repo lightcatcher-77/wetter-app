@@ -2294,7 +2294,14 @@ function prefetchSatNow(){
 // Füssen, bestätigt wolkenlos) und mit Marge auf 45 angehoben. Die zwei Referenzmessungen (~38 bei
 // echter dünner Bewölkung vs. ~37-41 bei echtem Klarwetter) liegen nah beieinander — der
 // IR-Kanal allein trennt in dieser Zone nicht zuverlässig, das bleibt eine Kompromiss-Schwelle.
-const SAT_CLEAR_LUM_MAX=45;
+// 16.08.2026: Gegenrichtung — bei tatsächlich teilweise bewölktem Himmel über Füssen (live
+// bestätigt) lag der Messwert bei ~39.7, also unterhalb der 45er-Schwelle, und der Satelliten-
+// Override hätte den Himmel fälschlich als "klar" gewertet. Damit liegen jetzt drei Referenzen
+// in derselben Zone (~38 dünne Bewölkung, ~37-41 klar, ~39.7 teilweise bewölkt) — die Zone taugt
+// also nicht als "klar"-Indikator. Schwelle konservativ auf 35 gesenkt (unterhalb aller bisherigen
+// "nicht klar"-Messwerte), auf Kosten dafür, dass echtes Klarwetter in der Grauzone seltener per
+// Override erkannt wird.
+const SAT_CLEAR_LUM_MAX=35;
 // Zweiter, deutlich höherer Schwellwert für die Gegenrichtung (Station meldet klar, Satellit
 // zeigt aber Wolken): nur ein eindeutig erkennbarer kalter/hoher Wolkenschirm soll die Station
 // überstimmen. Dazwischen (45-55) bleibt bewusst unentschieden — weder clear noch cloudy greift,
