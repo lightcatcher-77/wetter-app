@@ -1566,6 +1566,15 @@ function radarPrefetchFrames(){
   const f=activeFrames();
   const center=Math.min(Math.max(radarIndex,0),Math.max(f.length-1,0));
   f.forEach((fr,i)=>radarImgLoad(radarOverlayUrl(fr),1+Math.abs(i-center)));
+  // Ohne eigenes Prefetching wurde der Blitzdichte-Overlay erst beim tatsächlichen Erreichen
+  // eines Frames angefordert — spürbar langsamer als der Regen-Layer, der hier schon im
+  // Hintergrund vorlädt (~1-1.5s GeoServer-Renderzeit pro Frame beim Scrubben gefühlt). Läuft
+  // jetzt mit derselben Priorität mit, damit im Regen-Tab beide Layer gemeinsam aus dem
+  // Speicher kommen. Nur Vergangenheits-Frames (dwdPastLen) — für Prognose-Frames gibt es keine
+  // Blitzdaten (siehe radarSyncThunderOverlay).
+  if(radarMode==='rain'&&radarUsingDwdForLoc())
+    for(let i=0;i<dwdPastLen;i++)
+      radarImgLoad(thunderOverlayUrl(radarFrameIso(dwdFrames[thunderFrameIdx(i)])),1+Math.abs(i-center));
 }
 // RainViewer-Fallback: Kacheln kommen von einem CDN und sind — anders als der DWD-WMS —
 // regulär cachebar. Hier reicht es, die sichtbaren Kacheln aller Frames einmal anzufordern,
@@ -2246,6 +2255,11 @@ function thunderOverlayUrl(iso){
 // abhebt, saturate/contrast machen die Blitzfarben selbst kräftiger.
 const RADAR_THUNDER_FILTER='saturate(2) contrast(1.35) drop-shadow(0 0 3px rgba(0,0,0,.85))';
 let radarThunderCanvas=null, radarThunderCanvasView=null, radarThunderWantedUrl=null, radarThunderWantTimer=null;
+// Welcher dwdFrames-Index für den Blitzdichte-Layer bei Frame i tatsächlich abgefragt wird —
+// bei "Jetzt" (i===dwdPastLen-1) der letzte tatsächlich veröffentlichte Frame, siehe Kommentar
+// in radarSyncThunderOverlay. Eigene Funktion, damit radarPrefetchFrames() dieselbe Zuordnung
+// im Hintergrund vorlädt statt sie nur beim tatsächlichen Erreichen des Frames anzufragen.
+function thunderFrameIdx(i){ return i===dwdPastLen-1 ? Math.max(i-1,0) : i; }
 function radarSyncThunderOverlay(i){
   const show=radarMode==='rain'&&radarUsingDwdForLoc()&&i<dwdPastLen;
   if(!show){
@@ -2267,8 +2281,7 @@ function radarSyncThunderOverlay(i){
   // ein Gewitter läuft. Deshalb wird für diesen einen Frame stattdessen der letzte tatsächlich
   // beobachtete Frame (einen 5-Min-Schritt zurück) angezeigt — das Blitzbild ist dann zwar ein
   // paar Minuten alt, aber real und keine leere Kachel.
-  const thunderQueryIdx = (i===dwdPastLen-1) ? Math.max(i-1,0) : i;
-  const url=thunderOverlayUrl(radarFrameIso(dwdFrames[thunderQueryIdx]));
+  const url=thunderOverlayUrl(radarFrameIso(dwdFrames[thunderFrameIdx(i)]));
   radarThunderWantedUrl=url;
   const paint=e=>{
     if(!radarThunderCanvas||!e.img)return;
