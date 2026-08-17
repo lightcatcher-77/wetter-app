@@ -2260,7 +2260,15 @@ function radarSyncThunderOverlay(i){
     radarThunderCanvasView=view;
     radarThunderCanvas._image.style.filter=RADAR_THUNDER_FILTER;
   }
-  const url=thunderOverlayUrl(radarFrameIso(dwdFrames[i]));
+  // Der "Jetzt"-Frame (i===dwdPastLen-1) fragt beim Blitzdichte-Layer oft noch unveröffentlichte
+  // Daten ab — das Produkt lag im Live-Test ~5-6 Min. hinter der Regen-Analyse zurück (siehe
+  // dwdClassifyThunderNow), während der Regen-Layer selbst zu diesem Zeitpunkt schon reguläre
+  // Daten hat. Ohne Anpassung bliebe der Blitz-Overlay bei "Jetzt" leer, auch wenn tatsächlich
+  // ein Gewitter läuft. Deshalb wird für diesen einen Frame stattdessen der letzte tatsächlich
+  // beobachtete Frame (einen 5-Min-Schritt zurück) angezeigt — das Blitzbild ist dann zwar ein
+  // paar Minuten alt, aber real und keine leere Kachel.
+  const thunderQueryIdx = (i===dwdPastLen-1) ? Math.max(i-1,0) : i;
+  const url=thunderOverlayUrl(radarFrameIso(dwdFrames[thunderQueryIdx]));
   radarThunderWantedUrl=url;
   const paint=e=>{
     if(!radarThunderCanvas||!e.img)return;
