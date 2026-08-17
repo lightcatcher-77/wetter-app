@@ -523,7 +523,7 @@ function render(data){
       <div class="card hero-main">
         <span class="big-icon" id="big-icon">${cur.icon}</span>
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
-        <div class="condition">${cur.condition}</div>
+        <div class="condition" id="hero-condition">${cur.condition}</div>
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
         <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
@@ -1907,15 +1907,25 @@ const RADAR_RAIN_ICON='☔';
 let radarOverrideSeq=0;
 async function radarApplyOverride(info,loc){
   const iconEl=document.getElementById('big-icon');
+  const condEl=document.getElementById('hero-condition');
   if(!iconEl||!lastCur)return;
   const seq=++radarOverrideSeq;
   if(!info){
-    iconEl.textContent=lastCur.icon;
+    // Radar ist die Wahrheit: meldet es keinen Regen, obwohl Modell/Beobachtung gerade
+    // Regen zeigen, dann im Hero nicht den Regen-Zustand stehen lassen, sondern "bewölkt".
+    if(modelExpectsRain){
+      iconEl.textContent='☁️';
+      if(condEl)condEl.textContent='Bewölkt';
+    }else{
+      iconEl.textContent=lastCur.icon;
+      if(condEl)condEl.textContent=lastCur.condition;
+    }
     return;
   }
   const thunderNow=inGermany(loc.lat,loc.lon)?await dwdClassifyThunderNow(loc):false;
   if(seq!==radarOverrideSeq)return;
   iconEl.textContent=modelExpectsRain?lastCur.icon:(thunderNow?'⛈':RADAR_RAIN_ICON);
+  if(condEl&&modelExpectsRain)condEl.textContent=lastCur.condition;
   const end=await radarEstimateRainEnd(loc);
   const flagEl=document.getElementById('radar-flag');
   if(seq!==radarOverrideSeq||!flagEl)return;
