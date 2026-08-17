@@ -1026,7 +1026,15 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
   // Modell-Schätzung für "Jetzt" — ersetzt die Modell-Schätzung, da bereits real gemessen.
   let station = {source:'openmeteo'};
   if (bs && bs.weather && bs.weather.temperature!=null) {
-    nowCode = brightSkyToWmoCode(bs.weather);
+    // Bright Sky liefert 'condition' pro Feld einzeln aus der nächsten Station, die dieses Feld
+    // gerade meldet — meldet die Nahstation kein 'condition', fällt Bright Sky dafür auf eine
+    // andere, teils weit entfernte Station zurück (live beobachtet: Füssen fiel auf die
+    // Zugspitze-Gipfelstation, 27km entfernt/2150m höher, zurück → "Nebel" am Gipfel wurde als
+    // Wetter im Tal angezeigt, obwohl es dort tatsächlich regnete). fallback_source_ids nennt das
+    // Feld, wenn es zurückgefallen ist — dann lieber beim Modell-Code bleiben statt einer
+    // Beobachtung zu vertrauen, die nicht vom Standort stammt.
+    const condIsFallback = !!(bs.weather.fallback_source_ids && bs.weather.fallback_source_ids.condition);
+    if (!condIsFallback) nowCode = brightSkyToWmoCode(bs.weather);
     const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
     if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
   }
