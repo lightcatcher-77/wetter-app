@@ -539,7 +539,7 @@ function render(data){
       </div>
       <div class="hero-stats">
         <div class="stat-box"><div class="sv">💨 ${cur.wind}</div><div class="sl">km/h ${cur.windDir}</div></div>
-        <div class="${stat2Cls}"><div class="sv">${stat2Val}</div><div class="sl">${stat2Lbl}</div></div>
+        <div class="${stat2Cls}" id="stat2-box"><div class="sv" id="stat2-val">${stat2Val}</div><div class="sl" id="stat2-lbl">${stat2Lbl}</div></div>
         <div class="stat-box"><div class="sv">${stat3Val}</div><div class="sl">${stat3Lbl}</div></div>
         <div class="stat-box"><div class="sv" style="font-size:15px;line-height:1.45">🌅 ${cur.sunrise}<br>🌇 ${cur.sunset}</div><div class="sl">Sonne</div></div>
       </div>
@@ -1920,6 +1920,17 @@ const RADAR_RAIN_ICON='☔';
 // statt des Regensymbols gezeigt. Der Hinweis, wie lange der Regen laut Kurzfristprognose noch
 // anhält, wird an die bestehende Radar-Flag-Chip angehängt statt in einem eigenen Element
 // darunter — sonst taucht das Symbol im Hero doppelt auf (Chip + Dauer-Hinweis).
+// Setzt die zweite Hero-Statbox (Gewitter-% bzw. Regen-heute-%, siehe stat2Val/stat2Lbl in
+// render()) auf einen festen Radar-Zustand statt der Modellzahl — sonst widerspricht die
+// Statbox weiterhin dem Radar-korrigierten Hero-Icon (z.B. Icon zeigt ⛈ per Blitz-Erkennung,
+// darunter steht aber unverändert "💧 12% Regen heute" aus dem Modell).
+function setStat2FromRadar(thunder){
+  const box=document.getElementById('stat2-box'), val=document.getElementById('stat2-val'), lbl=document.getElementById('stat2-lbl');
+  if(!box)return;
+  box.className=thunder?'stat-box thunder-stat':'stat-box';
+  if(val)val.textContent=thunder?'⚡ Live':`💧 ${lastCur.rain_pct}%`;
+  if(lbl)lbl.textContent=thunder?'Gewitter':'Regen heute';
+}
 let radarOverrideSeq=0;
 async function radarApplyOverride(info,loc){
   const iconEl=document.getElementById('big-icon');
@@ -1929,6 +1940,8 @@ async function radarApplyOverride(info,loc){
   if(!info){
     // Radar ist die Wahrheit: meldet es keinen Regen, obwohl Modell/Beobachtung gerade
     // Regen zeigen, dann im Hero nicht den Regen-Zustand stehen lassen, sondern "bewölkt".
+    // Ohne Regen laut Radar kann auch kein Gewitter gerade laufen — Statbox entsprechend zurück
+    // auf "Regen heute", falls sie das Modell-Gewitter-% zeigte.
     if(modelExpectsRain){
       iconEl.textContent='☁️';
       if(condEl)condEl.textContent='Bewölkt';
@@ -1936,6 +1949,7 @@ async function radarApplyOverride(info,loc){
       iconEl.textContent=lastCur.icon;
       if(condEl)condEl.textContent=lastCur.condition;
     }
+    setStat2FromRadar(false);
     return;
   }
   const thunderNow=inGermany(loc.lat,loc.lon)?await dwdClassifyThunderNow(loc):false;
@@ -1947,6 +1961,10 @@ async function radarApplyOverride(info,loc){
   // die Radar-Beobachtung, unabhängig davon, was Modell/Station gerade zeigen.
   iconEl.textContent=thunderNow?'⛈':RADAR_RAIN_ICON;
   if(condEl)condEl.textContent=thunderNow?'Gewitter':(info.label[0].toUpperCase()+info.label.slice(1));
+  // Nur bei radar-bestätigtem Blitz die Statbox erzwingen — bei Regen ohne aktuellen Blitz-Treffer
+  // bleibt die Modellzahl stehen (Blitzdichte-Abfrage kann zwischen zwei Entladungen kurz leer
+  // sein, ohne dass das Gewitter vorbei ist; ein Herunterstufen würde dann flackern).
+  if(thunderNow)setStat2FromRadar(true);
   const end=await radarEstimateRainEnd(loc);
   const flagEl=document.getElementById('radar-flag');
   if(seq!==radarOverrideSeq||!flagEl)return;
