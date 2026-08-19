@@ -371,6 +371,14 @@ function calcScore(max,rain,sun,wind,thunder){
   const thS=thunder<=10?0.0:thunder<=25?-1.0:thunder<=50?-2.5:-4.0;
   return Math.max(0.5,Math.min(9.5,Math.round((5+tS+rS+sS+wS+thS)*10)/10));
 }
+// Tages-Score aus dem Mittel der Tagesabschnitte (Morgens/Mittags/Abends) statt aus
+// Tages-Aggregaten (die z.B. via Math.max-Gewitterrisiko den ganzen Tag abwerten, selbst
+// wenn nur abends 1-2 Stunden Gewitter drohen). So schlägt sich der Tagesverlauf im Score nieder.
+function calcDayScore(r){
+  if(!r.parts||!r.parts.length) return calcScore(r.max,r.rain,r.sun||5,r.wind||0,r.thunder||0);
+  const segScores=r.parts.map(p=>calcScore(p.tmax,p.rain,r.sun||5,p.wind,p.thunder||0));
+  return Math.round((segScores.reduce((a,b)=>a+b,0)/segScores.length)*10)/10;
+}
 function makeHourly(hourly24,sunrise,sunset,utcOffset){
   const srH=sunrise?parseInt(sunrise.split(':')[0]):5;
   const srM=sunrise?parseInt(sunrise.split(':')[1]):22;
@@ -505,7 +513,7 @@ function render(data){
   }).slice(0,7);
   lastFc=fc;
   const n=fc.length;
-  const scores=fc.map(r=>calcScore(r.max,r.rain,r.sun||5,r.wind||0,r.thunder||0));
+  const scores=fc.map(r=>calcDayScore(r));
   const bestI=scores.indexOf(Math.max(...scores));
   const showWarn=data.warning&&data.warning.text;
   const warnSev=data.warning?.severity||'info';
@@ -820,14 +828,15 @@ function toggleDay(i){
   }
   el.innerHTML=`${closeBtn}<div class="dd-head">${r.icon} ${r.wd} ${r.date} — Tagesverlauf</div>
     <div class="dd-grid">
-    ${r.parts.map(p=>`<div class="dd-seg">
+    ${r.parts.map(p=>{const ps=calcScore(p.tmax,p.rain,r.sun||5,p.wind,p.thunder||0);return`<div class="dd-seg">
       <div class="dd-lbl">${p.lbl}</div>
       <span class="dd-icon">${p.icon}</span>
       <div class="dd-cond">${p.cond}</div>
       <div class="dd-temp"><span style="color:${tempCol(p.tmax)}">${p.tmax}°</span><span class="dd-min"> / ${p.tmin}°</span></div>
       <div class="dd-rain">💧 ${p.rain}%${p.rainMm>=0.1?` · ${p.rainMm}mm`:''}${p.thunder>25?` · ⚡${p.thunder}%`:''}</div>
       <div class="dd-wind">🌬 ${p.wind} km/h</div>
-    </div>`).join('')}
+      <div class="dd-wind" style="color:${scoreCol(ps)};font-weight:700">🥾 ${ps.toFixed(1)}</div>
+    </div>`;}).join('')}
     </div>
     ${r.mdetail?`<div class="dd-models">🌡 Höchstwert je Modell: ${r.mdetail}</div>`:''}`;
 }
