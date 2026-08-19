@@ -1023,11 +1023,18 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
   const htimes = raw.hourly.time;
   let si = htimes.findIndex(t=>t>=nowIsoT);
   if (si<0) si=0;
+  // si zeigt per findIndex(>=) auf die nächste volle Stunde, sobald cur.time (mit Minuten)
+  // zwischen zwei Stundenwerten liegt — für die laufende Stunde (Jetzt-Code unten) muss aber
+  // die bereits begonnene Stunde herangezogen werden, sonst zeigt "Jetzt" schon die Prognose
+  // der kommenden Stunde (z.B. "nach dem Schauer/Gewitter", obwohl der laut Stundencode der
+  // aktuellen Stunde gerade noch läuft — live beobachtet als Diskrepanz zur Realität).
+  let nowHi = si;
+  if (nowHi>0 && htimes[nowHi]>nowIsoT) nowHi--;
 
   // "Jetzt"-Code: ICON statt best_match, da laut Gewichtungsschema (siehe W_NEAR) im
   // Nahbereich wegen der ICON-D2-Auflösung am verlässlichsten — best_match kann bei
   // durchbrochener Bewölkung von der real beobachteten Lage abweichen.
-  const iconMi = mHourIdx[htimes[si]];
+  const iconMi = mHourIdx[htimes[nowHi]];
   const iconNowCode = (iconMi!=null && rawM.hourly.weather_code_icon_seamless)
     ? rawM.hourly.weather_code_icon_seamless[iconMi] : null;
   let nowCode = iconNowCode!=null ? iconNowCode : cur.weather_code;
