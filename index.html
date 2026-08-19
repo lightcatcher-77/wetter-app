@@ -40,6 +40,8 @@
     .reload.loading{animation:spin 1s linear infinite;pointer-events:none;opacity:.6;}
     .favstar{position:absolute;top:0;left:0;width:38px;height:38px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text-dim);font-size:17px;cursor:pointer;line-height:1;}
     .favstar.on{color:var(--accent);border-color:rgba(245,200,66,.45);}
+    .mtn-favstar{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text-dim);font-size:13px;cursor:pointer;line-height:1;}
+    .mtn-favstar.on{color:var(--accent);border-color:rgba(245,200,66,.45);}
     .loc-chips{display:flex;gap:8px;overflow-x:auto;padding:4px 2px;margin-top:14px;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
     .loc-chips::-webkit-scrollbar{display:none;}
     .chip{flex-shrink:0;padding:7px 14px;border-radius:18px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;}
@@ -301,6 +303,7 @@ function rainScaleColor(pct){
 const CACHE_KEY = 'wetter-live-cache-v1';
 const FAVS_KEY = 'wetter-favs-v1';
 const LASTLOC_KEY = 'wetter-lastloc-v1';
+const MTN_FAVS_KEY = 'wetter-mtn-favs-v1';
 
 function mainUrl(lat,lon){
   return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,uv_index&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunshine_duration,wind_speed_10m_max,sunrise,sunset&timezone=auto&forecast_days=9`;
@@ -590,6 +593,7 @@ function render(data){
           <button class="chip" id="alt-tab-manual" onclick="altSwitchTab('manual')">✏️ Höhe manuell</button>
         </div>
         <div id="alt-peak-panel" class="loc-search">
+          <div class="loc-chips" id="alt-fav-chips" style="display:none;margin-top:0"></div>
           <div class="search-row">
             <input id="alt-search-input" type="search" placeholder="Berg suchen, z. B. Zugspitze…" autocomplete="off" oninput="onAltSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltSearch();}">
             <button onclick="runAltSearch()">Suchen</button>
@@ -631,6 +635,8 @@ function render(data){
   // Erst jetzt (nach dem DOM-Ersatz) auslösen — #radar-incoming lebt seit dem Umzug in die
   // Hero-Karte im dynamisch neu gebauten htmlTop und existiert vor dieser Zeile noch nicht.
   radarCheckIncoming();
+  renderMtnChips();
+  initMtnDrag();
   setTimeout(()=>{
     if(mySeq!==renderSeq)return; // neuerer render()-Aufruf ist bereits unterwegs/fertig
     const ctx=document.getElementById('tempChart');
@@ -2700,6 +2706,7 @@ async function runAltCalc(lat,lon,elevation,name,labelIcon){
     }
     if(!hours.length) throw new Error('Keine Höhendaten verfügbar');
     const days=computeAltDays(h,elevation);
+    shownAlt={name,lat,lon,elevation};
     box.innerHTML=renderAltResult(name,elevation,hours,labelIcon,days);
   }catch(e){
     if(myId!==altReqId)return;
@@ -2831,8 +2838,9 @@ function renderAltResult(name,elevation,hours,labelIcon,days){
     const cls=['h-cell',isNow?'h-now':'',c.thunder>40?'h-storm':''].filter(Boolean).join(' ');
     return `<div class="${cls}"><div class="h-lbl">${isNow?'Jetzt':c.iso.slice(11,16)}</div><span class="h-icon">${ic}</span><div class="h-temp" style="color:${tempCol(c.temp)}">${c.temp}°</div><div class="h-rain">${rainTxt}</div>${c.rainMm>=0.1?`<div class="h-rain">${c.rainMm}mm</div>`:''}${c.thunder>25?`<div class="h-thunder">⚡${c.thunder}%</div>`:''}</div>`;
   }).join('');
+  const isFav=mtnFavIndexOf(shownAlt)>=0;
   return `
-    <div class="alt-peak-label">${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</div>
+    <div class="alt-peak-label" style="display:flex;align-items:center;gap:8px">${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m <button class="mtn-favstar ${isFav?'on':''}" id="mtn-fav-btn" title="${isFav?'Berg entfernen':'Als Berg anpinnen'}" aria-label="Berg anpinnen/entfernen" onclick="toggleMtnFav()">${isFav?'★':'☆'}</button></div>
     <div class="hero-stats" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
       <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div>${flLine}</div>
       <div class="stat-box"><div class="sv">💧 ${now.rain}%</div><div class="sl">Regen${now.rainMm>=0.1?` · ${now.rainMm}mm`:''}</div></div>
@@ -2842,6 +2850,140 @@ function renderAltResult(name,elevation,hours,labelIcon,days){
     <div class="alt-note">Modellschätzung (Interpolation zwischen Druckflächen${hours.some(c=>!c.modeled)?', teils Extrapolation mit Standardatmosphäre':''}), keine lokalen Effekte wie Sonnenexposition, Kaltluftseen oder Wind berücksichtigt.</div>
     ${renderAltDays(days)}
   `;
+}
+
+// ── Höhenwetter: angepinnte Berge (analog Standort-Favoriten) ────────────────
+let mtnFavs=[];
+try{mtnFavs=JSON.parse(localStorage.getItem(MTN_FAVS_KEY)||'[]');}catch(e){}
+let mtnFavEditMode=false;
+let shownAlt=null; // {name,lat,lon,elevation} des zuletzt berechneten Höhenwetters
+
+function mtnFavKey(f){return `${(+f.lat).toFixed(2)},${(+f.lon).toFixed(2)}`;}
+function mtnFavIndexOf(f){return f?mtnFavs.findIndex(x=>mtnFavKey(x)===mtnFavKey(f)):-1;}
+function persistMtnFavs(){try{localStorage.setItem(MTN_FAVS_KEY,JSON.stringify(mtnFavs));}catch(e){}}
+
+function renderMtnChips(){
+  const box=document.getElementById('alt-fav-chips');
+  if(!box)return;
+  if(!mtnFavs.length){box.innerHTML='';box.style.display='none';return;}
+  box.style.display='flex';
+  let html=mtnFavs.map(f=>{
+    const key=mtnFavKey(f);
+    const removeBtn=mtnFavEditMode?`<span class="chip-remove" title="Berg entfernen" onclick="event.stopPropagation();removeMtnFavByKey('${esc(key)}')">✕</span>`:'';
+    return `<div class="chip fav ${mtnFavEditMode?'editing':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="mtnFavChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();mtnFavChipClick('${esc(key)}')}"><span class="chip-label">⛰️ ${esc(f.name)}</span>${removeBtn}</div>`;
+  }).join('');
+  html+=`<button class="chip edit-btn ${mtnFavEditMode?'active':''}" onclick="toggleMtnFavEditMode()" title="Berge bearbeiten">${mtnFavEditMode?'✓ Fertig':'☰'}</button>`;
+  box.innerHTML=html;
+}
+function toggleMtnFavEditMode(){mtnFavEditMode=!mtnFavEditMode;renderMtnChips();}
+function mtnFavChipClick(key){
+  if(mtnDragSuppressClick){mtnDragSuppressClick=false;return;}
+  selectMtnFavByKey(key);
+}
+function selectMtnFavByKey(key){
+  const f=mtnFavs.find(x=>mtnFavKey(x)===key);if(!f)return;
+  altSwitchTab('peak');
+  document.getElementById('alt-search-input').value=f.name;
+  document.getElementById('alt-search-results').innerHTML='';
+  runAltCalc(f.lat,f.lon,f.elevation,f.name,'⛰️');
+}
+function removeMtnFavByKey(key){
+  const i=mtnFavs.findIndex(x=>mtnFavKey(x)===key);if(i<0)return;
+  mtnFavs.splice(i,1);
+  persistMtnFavs();
+  renderMtnChips();
+  updateMtnStarBtn();
+}
+function toggleMtnFav(){
+  if(!shownAlt)return;
+  const i=mtnFavIndexOf(shownAlt);
+  if(i>=0)mtnFavs.splice(i,1);
+  else mtnFavs.push({name:shownAlt.name,lat:shownAlt.lat,lon:shownAlt.lon,elevation:shownAlt.elevation});
+  persistMtnFavs();
+  renderMtnChips();
+  updateMtnStarBtn();
+}
+function updateMtnStarBtn(){
+  const btn=document.getElementById('mtn-fav-btn');
+  if(!btn||!shownAlt)return;
+  const on=mtnFavIndexOf(shownAlt)>=0;
+  btn.textContent=on?'★':'☆';
+  btn.classList.toggle('on',on);
+  btn.title=on?'Berg entfernen':'Als Berg anpinnen';
+}
+
+// ── Höhenwetter: angepinnte Berge — Drag & Drop / Touch-Reihenfolge ──────────
+let mtnDragState=null, mtnDragSuppressClick=false, mtnDragIndicator=null;
+function initMtnDrag(){
+  const el=document.getElementById('alt-fav-chips');
+  if(!el)return;
+  el.addEventListener('pointerdown',mtnDragStart);
+  el.addEventListener('pointermove',mtnDragMove);
+  el.addEventListener('pointerup',mtnDragEnd);
+  el.addEventListener('pointercancel',mtnDragEnd);
+}
+function mtnDragStart(e){
+  if(!mtnFavEditMode)return;
+  if(e.target.closest('.chip-remove'))return;
+  const chip=e.target.closest('.chip.fav');
+  if(!chip)return;
+  mtnDragState={pointerId:e.pointerId,el:chip,startX:e.clientX,startY:e.clientY,moved:false};
+}
+function mtnDragMove(e){
+  if(!mtnDragState||e.pointerId!==mtnDragState.pointerId)return;
+  const chip=mtnDragState.el;
+  const dx=e.clientX-mtnDragState.startX, dy=e.clientY-mtnDragState.startY;
+  if(!mtnDragState.moved){
+    if(Math.hypot(dx,dy)<6)return;
+    mtnDragState.moved=true;
+    const r=chip.getBoundingClientRect();
+    mtnDragState.origLeft=r.left;mtnDragState.origTop=r.top;
+    try{chip.setPointerCapture(e.pointerId);}catch(err){}
+    mtnDragIndicator=document.createElement('div');
+    mtnDragIndicator.className='drop-indicator';
+    chip.parentNode.insertBefore(mtnDragIndicator,chip);
+    chip.classList.add('dragging');
+    chip.style.position='fixed';
+    chip.style.left=r.left+'px';
+    chip.style.top=r.top+'px';
+    chip.style.width=r.width+'px';
+  }
+  e.preventDefault();
+  chip.style.left=(mtnDragState.origLeft+dx)+'px';
+  chip.style.top=(mtnDragState.origTop+dy)+'px';
+  const container=document.getElementById('alt-fav-chips');
+  const siblings=[...container.querySelectorAll('.chip.fav')].filter(c=>c!==chip);
+  let placed=false;
+  for(const sib of siblings){
+    const r=sib.getBoundingClientRect();
+    if(e.clientX<r.left+r.width/2){
+      container.insertBefore(mtnDragIndicator,sib);
+      placed=true;
+      break;
+    }
+  }
+  if(!placed){
+    const editBtn=container.querySelector('.chip.edit-btn');
+    container.insertBefore(mtnDragIndicator,editBtn||null);
+  }
+}
+function mtnDragEnd(e){
+  if(!mtnDragState||e.pointerId!==mtnDragState.pointerId)return;
+  const wasMoved=mtnDragState.moved;
+  const chip=mtnDragState.el;
+  if(wasMoved){
+    const container=document.getElementById('alt-fav-chips');
+    container.insertBefore(chip,mtnDragIndicator);
+    mtnDragIndicator.remove();mtnDragIndicator=null;
+    chip.classList.remove('dragging');
+    chip.style.position='';chip.style.left='';chip.style.top='';chip.style.width='';
+    const keys=[...container.querySelectorAll('.chip.fav')].map(c=>c.dataset.key);
+    mtnFavs=keys.map(k=>mtnFavs.find(f=>mtnFavKey(f)===k)).filter(Boolean);
+    persistMtnFavs();
+    mtnDragSuppressClick=true;
+    renderMtnChips();
+  }
+  mtnDragState=null;
 }
 
 // ── Laden & Anzeigen ─────────────────────────────────────────────────────────
