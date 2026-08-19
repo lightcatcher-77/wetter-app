@@ -2840,7 +2840,7 @@ function renderAltResult(name,elevation,hours,labelIcon,days){
   }).join('');
   const isFav=mtnFavIndexOf(shownAlt)>=0;
   return `
-    <div class="alt-peak-label" style="display:flex;align-items:center;gap:8px">${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m <button class="mtn-favstar ${isFav?'on':''}" id="mtn-fav-btn" title="${isFav?'Berg entfernen':'Als Berg anpinnen'}" aria-label="Berg anpinnen/entfernen" onclick="toggleMtnFav()">${isFav?'★':'☆'}</button></div>
+    <div class="alt-peak-label" style="display:flex;align-items:center;gap:12px"><span>${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</span><button class="mtn-favstar ${isFav?'on':''}" id="mtn-fav-btn" title="${isFav?'Berg entfernen':'Als Berg anpinnen'}" aria-label="Berg anpinnen/entfernen" onclick="toggleMtnFav()">${isFav?'★':'☆'}</button></div>
     <div class="hero-stats" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
       <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div>${flLine}</div>
       <div class="stat-box"><div class="sv">💧 ${now.rain}%</div><div class="sl">Regen${now.rainMm>=0.1?` · ${now.rainMm}mm`:''}</div></div>
@@ -2870,7 +2870,7 @@ function renderMtnChips(){
   let html=mtnFavs.map(f=>{
     const key=mtnFavKey(f);
     const removeBtn=mtnFavEditMode?`<span class="chip-remove" title="Berg entfernen" onclick="event.stopPropagation();removeMtnFavByKey('${esc(key)}')">✕</span>`:'';
-    return `<div class="chip fav ${mtnFavEditMode?'editing':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="mtnFavChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();mtnFavChipClick('${esc(key)}')}"><span class="chip-label">⛰️ ${esc(f.name)}</span>${removeBtn}</div>`;
+    return `<div class="chip fav ${mtnFavEditMode?'editing':''}" data-key="${esc(key)}" role="button" tabindex="0" onclick="mtnFavChipClick('${esc(key)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();mtnFavChipClick('${esc(key)}')}"><span class="chip-label" style="display:inline-flex;align-items:center;gap:6px"><span>⛰️</span><span>${esc(f.name)}</span></span>${removeBtn}</div>`;
   }).join('');
   html+=`<button class="chip edit-btn ${mtnFavEditMode?'active':''}" onclick="toggleMtnFavEditMode()" title="Berge bearbeiten">${mtnFavEditMode?'✓ Fertig':'☰'}</button>`;
   box.innerHTML=html;
