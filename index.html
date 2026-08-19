@@ -102,10 +102,12 @@
     .hero-main .big-unit{font-size:28px;color:var(--text-dim);vertical-align:super;}
     .hero-main .condition{font-size:16px;color:var(--text-dim);margin-top:10px;}
     .hero-main .feels{font-size:13px;color:var(--text-dim);margin-top:4px;}
-    /* Solange der Radar-/Blitz-Abgleich noch läuft (radarApplyOverride), pulsiert Icon+Text
-       leicht — signalisiert, dass die Anzeige evtl. noch per Radar korrigiert wird, statt
-       direkt eine unbestätigte Modellzahl als final wirken zu lassen. */
-    .hero-main.radar-pending .big-icon,.hero-main.radar-pending .condition{animation:pulse 1.2s ease-in-out infinite;}
+    /* Solange der Radar-/Blitz-Abgleich noch läuft (radarApplyOverride), zeigt ein kleines
+       Laderädchen unter der Kondition an, dass die Anzeige evtl. noch per Radar korrigiert
+       wird — ein reines Pulsieren von Icon/Text war zu unauffällig, um klar als "lädt noch"
+       erkannt zu werden. */
+    .hero-spinner{display:none;width:16px;height:16px;margin:8px auto 0;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:var(--accent);animation:spin .8s linear infinite;}
+    .hero-main.radar-pending .hero-spinner{display:block;}
     .radar-flag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 11px;border-radius:10px;margin-top:10px;background:rgba(107,163,214,.14);border:1px solid rgba(107,163,214,.35);color:var(--blue);}
     .radar-flag.mittel{background:rgba(86,214,140,.14);border-color:rgba(86,214,140,.35);color:var(--green);}
     .radar-flag.stark{background:rgba(235,87,87,.14);border-color:rgba(235,87,87,.4);color:var(--red);}
@@ -539,6 +541,7 @@ function render(data){
         <span class="big-icon" id="big-icon">${cur.icon}</span>
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
         <div class="condition" id="hero-condition">${cur.condition}</div>
+        <div class="hero-spinner" id="hero-spinner" title="Radar-Abgleich läuft…"></div>
         <div class="feels">Gefühlt ${cur.feelsLike}°C · ${cur.humidity}% Feuchte</div>
         <div class="feels">${cur.station.source==='brightsky' ? `📡 ${esc(cur.station.name)} · ${cur.station.distanceKm} km entfernt` : '🛰️ Open-Meteo-Modellschätzung'}</div>
         <div><span class="radar-flag" id="radar-flag" style="display:none"></span></div>
