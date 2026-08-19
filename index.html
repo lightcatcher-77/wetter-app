@@ -1940,8 +1940,13 @@ async function radarApplyOverride(info,loc){
   }
   const thunderNow=inGermany(loc.lat,loc.lon)?await dwdClassifyThunderNow(loc):false;
   if(seq!==radarOverrideSeq)return;
-  iconEl.textContent=modelExpectsRain?lastCur.icon:(thunderNow?'⛈':RADAR_RAIN_ICON);
-  if(condEl&&modelExpectsRain)condEl.textContent=lastCur.condition;
+  // Radar/Blitzdichte haben Vorrang vor Modell/Station (Prioritätskette: Radar > Station >
+  // Vorhersage) — bisher wurde bei modelExpectsRain==true einfach das Modell-Icon/-Text
+  // übernommen, auch wenn die Blitzdichte-Abfrage gerade echten Blitz meldete (Modell sagte
+  // "irgendein Regencode", aber nicht explizit Gewitter → Blitz ging unter). Jetzt gilt immer
+  // die Radar-Beobachtung, unabhängig davon, was Modell/Station gerade zeigen.
+  iconEl.textContent=thunderNow?'⛈':RADAR_RAIN_ICON;
+  if(condEl)condEl.textContent=thunderNow?'Gewitter':(info.label[0].toUpperCase()+info.label.slice(1));
   const end=await radarEstimateRainEnd(loc);
   const flagEl=document.getElementById('radar-flag');
   if(seq!==radarOverrideSeq||!flagEl)return;
