@@ -100,6 +100,10 @@
     .hero-main .big-unit{font-size:28px;color:var(--text-dim);vertical-align:super;}
     .hero-main .condition{font-size:16px;color:var(--text-dim);margin-top:10px;}
     .hero-main .feels{font-size:13px;color:var(--text-dim);margin-top:4px;}
+    /* Solange der Radar-/Blitz-Abgleich noch läuft (radarApplyOverride), pulsiert Icon+Text
+       leicht — signalisiert, dass die Anzeige evtl. noch per Radar korrigiert wird, statt
+       direkt eine unbestätigte Modellzahl als final wirken zu lassen. */
+    .hero-main.radar-pending .big-icon,.hero-main.radar-pending .condition{animation:pulse 1.2s ease-in-out infinite;}
     .radar-flag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 11px;border-radius:10px;margin-top:10px;background:rgba(107,163,214,.14);border:1px solid rgba(107,163,214,.35);color:var(--blue);}
     .radar-flag.mittel{background:rgba(86,214,140,.14);border-color:rgba(86,214,140,.35);color:var(--green);}
     .radar-flag.stark{background:rgba(235,87,87,.14);border-color:rgba(235,87,87,.4);color:var(--red);}
@@ -528,7 +532,7 @@ function render(data){
   const htmlTop=`
     ${showWarn?`<div class="warning ${warnSev}"><div style="font-size:22px;line-height:1">⛈</div><div><strong>${esc(data.warning.title)}</strong><p>${esc(data.warning.text)}</p></div></div>`:''}
     <div class="hero">
-      <div class="card hero-main">
+      <div class="card hero-main radar-pending" id="hero-main">
         <span class="big-icon" id="big-icon">${cur.icon}</span>
         <div class="big-temp">${cur.temp}<span class="big-unit">°C</span></div>
         <div class="condition" id="hero-condition">${cur.condition}</div>
@@ -1936,6 +1940,9 @@ async function radarApplyOverride(info,loc){
   const iconEl=document.getElementById('big-icon');
   const condEl=document.getElementById('hero-condition');
   if(!iconEl||!lastCur)return;
+  // Ladeanimation (siehe .radar-pending) beenden — ab hier steht in jedem Zweig unten die
+  // finale, radar-abgeglichene Anzeige fest.
+  document.getElementById('hero-main')?.classList.remove('radar-pending');
   const seq=++radarOverrideSeq;
   if(!info){
     // Radar ist die Wahrheit: meldet es keinen Regen, obwohl Modell/Beobachtung gerade
