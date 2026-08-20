@@ -2646,8 +2646,16 @@ function onAltSearchInput(){
   altSearchDebounce=setTimeout(runAltSearch,300);
 }
 // Alpenraum: grobe Bounding-Box (kein exaktes Grenzpolygon), analog zu isGermany() —
-// deckt West- bis Ostalpen ab (frz. Alpen bis Julische Alpen).
+// deckt West- bis Ostalpen ab (frz. Alpen bis Julische Alpen). Dient als Fallback für die
+// Bergsuchen-Sortierung, wenn kein aktueller Standort (shownLoc) bekannt ist.
 function isAlpine(lat,lon){ return lat>=43.0&&lat<=48.5&&lon>=5.0&&lon<=16.5; }
+// Luftlinien-Distanz (km) — für die Bergsuchen-Sortierung nach Nähe zum angezeigten Ort.
+function distKm(lat1,lon1,lat2,lon2){
+  const R=6371,toRad=d=>d*Math.PI/180;
+  const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
 async function runAltSearch(){
   clearTimeout(altSearchDebounce);
   const q=document.getElementById('alt-search-input').value.trim();
@@ -2661,10 +2669,15 @@ async function runAltSearch(){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
     if(myId!==altReqId)return;
-    // Alpenraum-Gipfel ganz oben, dann übrige Berge/Gipfel (Feature-Codes MT/PK), dann der
-    // Rest — innerhalb der Gruppen bleibt die Relevanz-Reihenfolge der API erhalten.
+    // Berge/Gipfel (Feature-Codes MT/PK) zuerst, dann der Rest. Innerhalb der Gipfel: die
+    // dem aktuell angezeigten Ort nächstgelegenen zuerst; ohne bekannten Ort (shownLoc) als
+    // Fallback die Alpenraum-Gipfel ganz oben (grobe Bounding-Box), Relevanz-Reihenfolge der
+    // API sonst erhalten.
     const all=(j.results||[]).map(x=>({name:x.name,lat:x.latitude,lon:x.longitude,elevation:x.elevation,isPeak:x.feature_code==='MT'||x.feature_code==='PK',info:[x.admin1,x.country].filter(Boolean).join(', ')}));
-    altSearchResults=[...all.filter(x=>x.isPeak&&isAlpine(x.lat,x.lon)),...all.filter(x=>x.isPeak&&!isAlpine(x.lat,x.lon)),...all.filter(x=>!x.isPeak)];
+    const peaks=all.filter(x=>x.isPeak), rest=all.filter(x=>!x.isPeak);
+    if(shownLoc) peaks.sort((a,b)=>distKm(shownLoc.lat,shownLoc.lon,a.lat,a.lon)-distKm(shownLoc.lat,shownLoc.lon,b.lat,b.lon));
+    else peaks.sort((a,b)=>isAlpine(a.lat,a.lon)===isAlpine(b.lat,b.lon)?0:(isAlpine(a.lat,a.lon)?-1:1));
+    altSearchResults=[...peaks,...rest];
     box.innerHTML=altSearchResults.length
       ?altSearchResults.map((x,i)=>`<button class="sr-item" onclick="pickAltPeak(${i})">${x.isPeak?'⛰️ ':''}${esc(x.name)}${x.elevation!=null?` · ${Math.round(x.elevation)} m`:''}<span>${esc(x.info)}</span></button>`).join('')
       :'<div class="sr-note">Kein Berg gefunden.</div>';
