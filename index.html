@@ -2645,6 +2645,9 @@ function onAltSearchInput(){
   if(q.length<2){altReqId++;box.innerHTML='';return;}
   altSearchDebounce=setTimeout(runAltSearch,300);
 }
+// Alpenraum: grobe Bounding-Box (kein exaktes Grenzpolygon), analog zu isGermany() —
+// deckt West- bis Ostalpen ab (frz. Alpen bis Julische Alpen).
+function isAlpine(lat,lon){ return lat>=43.0&&lat<=48.5&&lon>=5.0&&lon<=16.5; }
 async function runAltSearch(){
   clearTimeout(altSearchDebounce);
   const q=document.getElementById('alt-search-input').value.trim();
@@ -2658,9 +2661,10 @@ async function runAltSearch(){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
     if(myId!==altReqId)return;
-    // Berge/Gipfel (Feature-Codes MT/PK) zuerst, sonst bleibt die Relevanz-Reihenfolge der API erhalten.
+    // Alpenraum-Gipfel ganz oben, dann übrige Berge/Gipfel (Feature-Codes MT/PK), dann der
+    // Rest — innerhalb der Gruppen bleibt die Relevanz-Reihenfolge der API erhalten.
     const all=(j.results||[]).map(x=>({name:x.name,lat:x.latitude,lon:x.longitude,elevation:x.elevation,isPeak:x.feature_code==='MT'||x.feature_code==='PK',info:[x.admin1,x.country].filter(Boolean).join(', ')}));
-    altSearchResults=[...all.filter(x=>x.isPeak),...all.filter(x=>!x.isPeak)];
+    altSearchResults=[...all.filter(x=>x.isPeak&&isAlpine(x.lat,x.lon)),...all.filter(x=>x.isPeak&&!isAlpine(x.lat,x.lon)),...all.filter(x=>!x.isPeak)];
     box.innerHTML=altSearchResults.length
       ?altSearchResults.map((x,i)=>`<button class="sr-item" onclick="pickAltPeak(${i})">${x.isPeak?'⛰️ ':''}${esc(x.name)}${x.elevation!=null?` · ${Math.round(x.elevation)} m`:''}<span>${esc(x.info)}</span></button>`).join('')
       :'<div class="sr-note">Kein Berg gefunden.</div>';
