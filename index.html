@@ -59,6 +59,11 @@
     .loc-search input{flex:1;padding:10px 14px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:16px;outline:none;}
     .loc-search input::placeholder{color:var(--text-dim);}
     .loc-search .search-row button{padding:10px 18px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;}
+    .input-wrap{position:relative;flex:1;}
+    .input-wrap input{width:100%;padding-right:38px;box-sizing:border-box;}
+    .input-wrap input::-webkit-search-cancel-button{display:none;-webkit-appearance:none;}
+    .input-clear{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;align-items:center;justify-content:center;border-radius:50%;border:none;background:rgba(255,255,255,.12);color:var(--text-dim);font-size:12px;line-height:1;cursor:pointer;padding:0;}
+    .input-wrap input:not(:placeholder-shown) ~ .input-clear{display:flex;}
     .sr-item{display:flex;justify-content:space-between;gap:12px;width:100%;padding:10px 14px;margin-top:6px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;text-align:left;}
     .sr-item span{color:var(--text-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .sr-note{padding:10px 4px;font-size:13px;color:var(--text-dim);}
@@ -246,7 +251,10 @@
     <div class="loc-chips" id="loc-chips"></div>
     <div class="loc-search" id="loc-search" style="display:none">
       <div class="search-row">
-        <input id="search-input" type="search" placeholder="Ort suchen, z. B. Berlin…" autocomplete="off" oninput="onSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runSearch();}">
+        <div class="input-wrap">
+          <input id="search-input" type="search" placeholder="Ort suchen, z. B. Berlin…" autocomplete="off" oninput="onSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runSearch();}">
+          <button type="button" class="input-clear" onclick="clearSearchInput('search-input',onSearchInput)" title="Eingabe löschen" aria-label="Eingabe löschen">✕</button>
+        </div>
         <button onclick="runSearch()">Suchen</button>
       </div>
       <div id="search-results"></div>
@@ -599,7 +607,10 @@ function render(data){
         <div id="alt-peak-panel" class="loc-search">
           <div class="loc-chips" id="alt-fav-chips" style="display:none;margin-top:0;margin-bottom:14px"></div>
           <div class="search-row">
-            <input id="alt-search-input" type="search" placeholder="Berg suchen, z. B. Zugspitze…" autocomplete="off" oninput="onAltSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltSearch();}">
+            <div class="input-wrap">
+              <input id="alt-search-input" type="search" placeholder="Berg suchen, z. B. Zugspitze…" autocomplete="off" oninput="onAltSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltSearch();}">
+              <button type="button" class="input-clear" onclick="clearSearchInput('alt-search-input',onAltSearchInput)" title="Eingabe löschen" aria-label="Eingabe löschen">✕</button>
+            </div>
             <button onclick="runAltSearch()">Suchen</button>
           </div>
           <div id="alt-search-results"></div>
@@ -2578,6 +2589,15 @@ function toggleSearch(show){
   if(vis)document.getElementById('search-input').focus();
   else document.getElementById('search-results').innerHTML='';
 }
+// Leert ein Sucheingabefeld per ✕-Button (Standort- und Bergsuche teilen sich das Markup)
+// und stößt den übergebenen oninput-Handler an, damit Debounce/Request-Invalidierung und
+// das Leeren der Ergebnisliste exakt wie beim Tippen laufen.
+function clearSearchInput(inputId,onInputFn){
+  const inp=document.getElementById(inputId);
+  inp.value='';
+  onInputFn();
+  inp.focus();
+}
 let searchDebounce=null, searchReqId=0;
 function onSearchInput(){
   clearTimeout(searchDebounce);
@@ -2664,7 +2684,12 @@ async function runAltSearch(){
   const myId=++altReqId;
   box.innerHTML='<div class="sr-note">Suche…</div>';
   try{
-    const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=de&format=json`);
+    // count=100 (API-Maximum) statt 8: Open-Meteos eigene Relevanz-Reihenfolge ist grob
+    // populationsbasiert, dadurch fallen abgelegene, aber real existierende Gipfel (z. B.
+    // "Daniel" in Tirol) bei nur 8 Treffern oft schon vor unserer eigenen Gipfel/Distanz-
+    // Sortierung unten raus. Mit 100 Kandidaten sortieren wir selbst und zeigen danach nur
+    // die besten 8 an.
+    const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=100&language=de&format=json`);
     if(myId!==altReqId)return;
     if(!r.ok)throw new Error('HTTP '+r.status);
     const j=await r.json();
@@ -2677,7 +2702,7 @@ async function runAltSearch(){
     const peaks=all.filter(x=>x.isPeak), rest=all.filter(x=>!x.isPeak);
     if(shownLoc) peaks.sort((a,b)=>distKm(shownLoc.lat,shownLoc.lon,a.lat,a.lon)-distKm(shownLoc.lat,shownLoc.lon,b.lat,b.lon));
     else peaks.sort((a,b)=>isAlpine(a.lat,a.lon)===isAlpine(b.lat,b.lon)?0:(isAlpine(a.lat,a.lon)?-1:1));
-    altSearchResults=[...peaks,...rest];
+    altSearchResults=[...peaks,...rest].slice(0,8);
     box.innerHTML=altSearchResults.length
       ?altSearchResults.map((x,i)=>`<button class="sr-item" onclick="pickAltPeak(${i})">${x.isPeak?'⛰️ ':''}${esc(x.name)}${x.elevation!=null?` · ${Math.round(x.elevation)} m`:''}<span>${esc(x.info)}</span></button>`).join('')
       :'<div class="sr-note">Kein Berg gefunden.</div>';
