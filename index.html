@@ -2854,7 +2854,7 @@ function renderAltResult(name,elevation,hours,labelIcon,days){
   }).join('');
   const isFav=mtnFavIndexOf(shownAlt)>=0;
   return `
-    <div class="alt-peak-label" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px"><span>${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</span><button class="mtn-favstar ${isFav?'on':''}" id="mtn-fav-btn" style="margin-left:14px;flex-shrink:0" title="${isFav?'Berg entfernen':'Als Berg anpinnen'}" aria-label="Berg anpinnen/entfernen" onclick="toggleMtnFav()">${isFav?'★':'☆'}</button></div>
+    <div class="alt-peak-label" style="display:flex;align-items:center;margin-top:14px"><span>${labelIcon} <strong>${esc(name)}</strong> · ${elevation} m</span><button class="mtn-favstar ${isFav?'on':''}" id="mtn-fav-btn" style="margin-left:14px;flex-shrink:0" title="${isFav?'Berg entfernen':'Als Berg anpinnen'}" aria-label="Berg anpinnen/entfernen" onclick="toggleMtnFav()">${isFav?'★':'☆'}</button></div>
     <div class="hero-stats" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
       <div class="stat-box"><div class="sv" style="color:${tempCol(now.temp)}">${icon} ${now.temp}°C</div><div class="sl">${esc(cond)}</div>${flLine}</div>
       <div class="stat-box"><div class="sv">💧 ${now.rain}%</div><div class="sl">Regen${now.rainMm>=0.1?` · ${now.rainMm}mm`:''}</div></div>
