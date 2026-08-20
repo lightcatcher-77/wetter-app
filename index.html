@@ -56,9 +56,9 @@
     .chip-remove:hover{background:rgba(255,255,255,.15);color:var(--text);}
     .loc-search{margin-top:10px;text-align:left;}
     .loc-search .search-row{display:flex;gap:8px;}
-    .loc-search input{flex:1;padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:16px;outline:none;}
+    .loc-search input{flex:1;padding:10px 14px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:16px;outline:none;}
     .loc-search input::placeholder{color:var(--text-dim);}
-    .loc-search .search-row button{padding:10px 18px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;}
+    .loc-search .search-row button{padding:10px 18px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;}
     .sr-item{display:flex;justify-content:space-between;gap:12px;width:100%;padding:10px 14px;margin-top:6px;border-radius:12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;text-align:left;}
     .sr-item span{color:var(--text-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .sr-note{padding:10px 4px;font-size:13px;color:var(--text-dim);}
@@ -597,7 +597,7 @@ function render(data){
           <button class="chip" id="alt-tab-manual" onclick="altSwitchTab('manual')">✏️ Höhe manuell</button>
         </div>
         <div id="alt-peak-panel" class="loc-search">
-          <div class="loc-chips" id="alt-fav-chips" style="display:none;margin-top:0"></div>
+          <div class="loc-chips" id="alt-fav-chips" style="display:none;margin-top:0;margin-bottom:14px"></div>
           <div class="search-row">
             <input id="alt-search-input" type="search" placeholder="Berg suchen, z. B. Zugspitze…" autocomplete="off" oninput="onAltSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();runAltSearch();}">
             <button onclick="runAltSearch()">Suchen</button>
