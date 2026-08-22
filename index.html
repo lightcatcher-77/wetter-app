@@ -1750,8 +1750,11 @@ function initRadar(){
     clearTimeout(radarViewTimer);
     radarViewTimer=setTimeout(radarViewChanged,180);
   });
-  fetchRadarFrames();
-  refreshRainDisplay();
+  // Bewusst kein Daten-Fetch hier: radarMap zeigt bis dahin nur den Kartenhintergrund für den
+  // Fallback-Ort. Ein sofortiger Abruf würde für den Fallback-Ort laden, obwohl der echte
+  // Standort (aus Cache oder Geolocation) meist Sekunden später ohnehin einen erneuten Abruf
+  // auslöst (radarSetCenter) — der doppelte Kachel-/Bild-Ansturm direkt beim Start hat bisher
+  // mit der eigentlichen Vorhersage-Abfrage um Bandbreite konkurriert und sie verlangsamt.
 }
 function radarSetCenter(lat,lon){
   if(!radarMap)return;
@@ -3138,6 +3141,7 @@ if(cached&&cached.data&&cached.data.meta){
   render(cached.data);
   hasRendered=true;
   shownLoc=cached.loc||null;
+  if(shownLoc){radarSetCenter(shownLoc.lat,shownLoc.lon);fetchRadarFrames();}
   updateFavBtn();
   lastTs=`${cached.data.meta.ts} ${cached.data.meta.ts_time}`;
   renderCheckBadge(doubleCheck(cached.data));
