@@ -1733,13 +1733,18 @@ function initRadar(){
   if(typeof L==='undefined'||radarMap)return;
   radarMap=L.map('radar-map',{attributionControl:true,zoomControl:true,scrollWheelZoom:false})
     .setView([FALLBACK.lat,FALLBACK.lon],9);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',{
-    subdomains:'abcd',maxZoom:19,zIndex:1,attribution:'© OpenStreetMap, © CARTO'
+  // CARTOs freie {s}.basemaps.cartocdn.com-Kacheln verlangen inzwischen einen Account
+  // (Kachelbild zeigt nur noch "API KEY REQUIRED") — auf Esris freien, weiterhin
+  // schlüssellosen Dark-Gray-Canvas-Basemap umgestellt. Der native Zoom endet bei 16
+  // ("Map data not yet available" darüber), maxNativeZoom lässt Leaflet ab da hochskalieren
+  // statt echte Kacheln nachzuladen (analog zum RainViewer-Fallback weiter unten).
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',{
+    maxZoom:18,maxNativeZoom:16,zIndex:1,attribution:'© Esri'
   }).addTo(radarMap);
   // Eigene Beschriftungs-Ebene ganz oben (hoher zIndex) — Ortsnamen bleiben so auch unter
   // einer hellen Regen-/Wolkenebene lesbar, statt darunter im Kartenhintergrund zu verschwinden.
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{
-    subdomains:'abcd',maxZoom:19,zIndex:650
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{
+    maxZoom:18,maxNativeZoom:16,zIndex:650
   }).addTo(radarMap);
   radarMarker=L.circleMarker([FALLBACK.lat,FALLBACK.lon],{radius:6,color:'#f5c842',weight:2,fillColor:'#f5c842',fillOpacity:.9,pane:'markerPane'}).addTo(radarMap);
   radarLoc={lat:FALLBACK.lat,lon:FALLBACK.lon};
