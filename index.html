@@ -1679,11 +1679,27 @@ function radarSetLoading(on){
   const el=document.getElementById('radar-time');
   if(el)el.classList.toggle('loading',!!on);
 }
+// Schneller RainViewer-Kachel-Platzhalter für die Wartezeit auf das erste DWD-Bild: der
+// DWD-GeoServer rendert live und braucht dafür je nach Auslastung 5-15s (per Live-Test
+// gemessen, nicht die ~1-1.5s, von denen der Rest des Frame-Engine-Codes ausgeht) — ohne
+// Platzhalter blieb die Karte beim Öffnen so lange leer. RainViewers Kacheln kommen aus einem
+// CDN und sind ungenauer, aber praktisch sofort da. Liegt unterhalb des DWD-Canvas (zIndex 400)
+// und wird entfernt, sobald das echte Bild gezeichnet ist (radarPaint) oder der Tab wechselt.
+let radarFallbackTiles=null;
+function radarShowFallbackTiles(){
+  if(radarFallbackTiles||!radarMap||!radarHost||!radarFrames.length||!radarPastLen)return;
+  const url=`${radarHost}${radarFrames[radarPastLen-1].path}/256/{z}/{x}/{y}/2/1_1.png`;
+  radarFallbackTiles=L.tileLayer(url,{opacity:.55,maxNativeZoom:12,zIndex:390}).addTo(radarMap);
+}
+function radarHideFallbackTiles(){
+  if(radarFallbackTiles){radarMap.removeLayer(radarFallbackTiles);radarFallbackTiles=null;}
+}
 // Die Bounds werden erst zusammen mit dem passenden Bild gesetzt: solange das Bild für einen
 // neuen Ausschnitt noch lädt, bleibt das alte an seiner echten geografischen Position stehen,
 // statt auf den neuen Ausschnitt verzerrt zu werden.
 function radarPaint(e){
   radarSetLoading(false);
+  radarHideFallbackTiles();
   if(!radarCanvas||!e.img)return;
   if(e.view&&radarCanvasView!==e.view){radarCanvas.setBounds(e.view.bounds);radarCanvasView=e.view;}
   radarCanvas.drawFrame(e.img);
@@ -1698,6 +1714,7 @@ function radarShowOverlayFrame(i){
   const cached=radarImgCache.get(url);
   if(cached&&cached.state==='ok'&&cached.img){radarPaint(cached);return;}
   radarSetLoading(true);
+  if(radarMode==='rain'&&radarUsingDwdForLoc())radarShowFallbackTiles();
   // Beim Ziehen des Sliders nicht für jeden Zwischenwert einen WMS-Request auslösen: gecachte
   // Frames sind oben schon synchron gezeichnet, ungecachte werden erst angefordert, wenn der
   // Finger kurz stehen bleibt. Ohne das würde eine einzige Wischbewegung Dutzende Live-
@@ -2167,6 +2184,11 @@ async function fetchRadarFrames(){
     radarFrames=[...(j.radar?.past||[]),...(j.radar?.nowcast||[])];
     radarPastLen=(j.radar?.past||[]).length;
     if(!radarFrames.length)throw new Error('Keine Radardaten verfügbar');
+    // Falls das erste DWD-Bild schon vor diesem Fetch zu laden begann (radarFrames war da noch
+    // leer, radarShowFallbackTiles also ein No-Op), hier nachholen — sonst bleibt die Karte beim
+    // allerersten Aufruf (kein vorheriger fetchRadarFrames in dieser Session) trotzdem leer.
+    if(radarMode==='rain'&&radarUsingDwdForLoc()&&document.getElementById('radar-time')?.classList.contains('loading'))
+      radarShowFallbackTiles();
     radarSampleAtLocation();
     // Satelliten-"Jetzt"-Bild schon jetzt im Hintergrund vorladen (unabhängig vom aktiven
     // Tab), damit es beim Wechsel auf "Wolken" meist schon aus dem Cache kommt.
@@ -2278,6 +2300,7 @@ function radarTogglePlay(){
 function radarSwitchMode(mode){
   if(mode===radarMode)return;
   if(radarPlaying)radarTogglePlay();
+  radarHideFallbackTiles();
   radarMode=mode;
   document.getElementById('radar-tab-rain').classList.toggle('active',mode==='rain');
   document.getElementById('radar-tab-rain').setAttribute('aria-selected',mode==='rain');
