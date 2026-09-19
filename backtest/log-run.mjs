@@ -7,7 +7,12 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const FUSSEN = { lat: 47.5676, lon: 10.7012 };
+// Koordinaten der DWD-Station Halblech-Bayernieder (nicht Füssen-Zentrum!) — bewusst so gewählt,
+// dass Vorhersage-Zielpunkt und Beobachtungs-Station exakt zusammenfallen. Vorher lag hier
+// Füssens Koordinate (47.5676, 10.7012), ca. 10km von der nächsten Station entfernt; das
+// vermischte reine Modellgüte mit Standort-Abweichung. Ab hier gemessene Werte sind daher nicht
+// direkt mit älteren Backtest-Zeilen vergleichbar.
+const TARGET = { lat: 47.6248, lon: 10.8075 };
 const MODELS = ['icon_seamless', 'meteoswiss_icon_ch1', 'ecmwf_ifs', 'gfs_seamless', 'meteofrance_seamless'];
 const LEAD_HOURS = [0, 6, 24, 48, 72, 96, 120, 144, 168]; // 0h bis 7 Tage, ab Tag 3 im Tagesabstand
 
@@ -87,14 +92,14 @@ async function main() {
   let obsRow = null;
 
   try {
-    const raw = await fetchPredictions(FUSSEN.lat, FUSSEN.lon);
+    const raw = await fetchPredictions(TARGET.lat, TARGET.lon);
     predRows = extractPredictionRows(raw, issuedHourIso);
   } catch (e) {
     console.log(`::warning::predictions fetch failed: ${e.message}`);
   }
 
   try {
-    const raw = await fetchObservation(FUSSEN.lat, FUSSEN.lon);
+    const raw = await fetchObservation(TARGET.lat, TARGET.lon);
     obsRow = buildObservationRow(raw);
   } catch (e) {
     console.log(`::warning::observation fetch failed: ${e.message}`);
