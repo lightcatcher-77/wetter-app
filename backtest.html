@@ -59,6 +59,13 @@
 
   <div class="card">
     <div class="toolbar">
+      <h2>Genauigkeit pro Modell <span class="hint">Ø Abweichung (MAE) in °C, gesamt und nach Vorlaufzeit. Kleiner = genauer. „–" heißt: für diese Vorlaufzeit liegt noch kein Vergleich vor (Modell rechnet nicht so weit voraus, oder Zeitpunkt liegt noch in der Zukunft).</span></h2>
+    </div>
+    <div class="tablewrap"><div id="accuracy-table" class="loading">Lädt …</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
       <h2>Vorhersage vs. Realität <span class="hint">Vorhergesagter und tatsächlicher Wert für denselben Zeitpunkt, direkt nebeneinander</span></h2>
     </div>
     <div class="tablewrap"><div id="compare-table" class="loading">Lädt …</div></div>
@@ -81,10 +88,11 @@
 </div>
 
 <script>
-const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE' };
-const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a' };
+const MODEL_LBL = { icon_seamless:'ICON', ecmwf_ifs025:'IFS', ecmwf_ifs:'IFS HD', gfs_seamless:'GFS', meteofrance_seamless:'ARPEGE', meteoswiss_icon_ch1:'ICON CH1' };
+const MODEL_HEX = { icon_seamless:'#f5c842', ecmwf_ifs025:'#6ba3d6', ecmwf_ifs:'#b48eec', gfs_seamless:'#56d68c', meteofrance_seamless:'#f2994a', meteoswiss_icon_ch1:'#e07be0' };
 const RECENT_RUNS = 5; // Anzahl der jüngsten stündlichen Läufe, die standardmäßig gezeigt werden
 const RECENT_OBS = 100;
+const LEAD_BUCKETS = [0, 6, 24, 48, 72, 96, 120, 144, 168]; // muss zu LEAD_HOURS in backtest/log-run.mjs passen
 
 function hexToRgba(hex,a){
   const n=parseInt(hex.slice(1),16);
@@ -148,12 +156,55 @@ function buildComparisons(predRows, obsRows){
   return rows;
 }
 
+// Aggregiert die Vergleichs-Zeilen (aus buildComparisons) zu MAE/Bias je Modell,
+// insgesamt und aufgeschlüsselt nach Vorlaufzeit.
+function computeModelAccuracy(compRows){
+  const byModel = new Map();
+  for(const r of compRows){
+    if(r.diff==null) continue;
+    if(!byModel.has(r.model)) byModel.set(r.model, { n:0, sumAbs:0, sumErr:0, byLead:new Map() });
+    const m = byModel.get(r.model);
+    m.n++; m.sumAbs += Math.abs(r.diff); m.sumErr += r.diff;
+    if(!m.byLead.has(r.lead_h)) m.byLead.set(r.lead_h, { n:0, sumAbs:0 });
+    const l = m.byLead.get(r.lead_h);
+    l.n++; l.sumAbs += Math.abs(r.diff);
+  }
+  return [...byModel.entries()].map(([model, m]) => ({
+    model,
+    n: m.n,
+    mae: m.sumAbs / m.n,
+    bias: m.sumErr / m.n,
+    leadMae: LEAD_BUCKETS.map(lead => {
+      const l = m.byLead.get(lead);
+      return l ? l.sumAbs / l.n : null;
+    }),
+  })).sort((a,b) => a.mae - b.mae);
+}
+
 function diffColor(diff){
   if(diff==null) return 'var(--text-dim)';
   const a = Math.abs(diff);
   if(a<=1) return 'var(--green)';
   if(a<=3) return 'var(--accent)';
   return 'var(--red)';
+}
+
+function renderModelAccuracy(stats){
+  const el = document.getElementById('accuracy-table');
+  if(!stats.length){
+    el.innerHTML = '<div class="empty">Noch keine Vergleiche für eine Genauigkeits-Auswertung.</div>';
+    return;
+  }
+  el.innerHTML = `<table><thead><tr>
+    <th>Modell</th><th>Vergleiche</th><th>Ø Abweichung</th><th>Bias</th>${LEAD_BUCKETS.map(l=>`<th>+${l}h</th>`).join('')}
+  </tr></thead><tbody>${stats.map(s=>`
+    <tr>
+      <td><span class="model-badge" style="background:${hexToRgba(MODEL_HEX[s.model]||'#8ba0b8',.18)};color:${MODEL_HEX[s.model]||'#e8edf4'}">${MODEL_LBL[s.model]||s.model}</span></td>
+      <td class="lead">${s.n}</td>
+      <td class="diff" style="color:${diffColor(s.mae)}">${s.mae.toFixed(1)}°C</td>
+      <td class="diff" style="color:${diffColor(s.bias)}">${s.bias>0?'+':''}${s.bias.toFixed(1)}°C</td>
+      ${s.leadMae.map(v=>`<td class="diff" style="color:${v!=null?diffColor(v):'var(--text-dim)'}">${v!=null?v.toFixed(1):'–'}</td>`).join('')}
+    </tr>`).join('')}</tbody></table>`;
 }
 
 function renderComparisons(rows){
@@ -236,14 +287,17 @@ async function main(){
       loadJsonl('backtest-data/observations.jsonl'),
     ]);
     allPredRows = predRows;
+    const compRows = buildComparisons(predRows, obsRows);
     renderStats(predRows, obsRows);
-    renderComparisons(buildComparisons(predRows, obsRows));
+    renderModelAccuracy(computeModelAccuracy(compRows));
+    renderComparisons(compRows);
     renderPredictions(predRows, showAllPred);
     renderObservations(obsRows);
     document.getElementById('pred-count').textContent = `(${predRows.length} gesamt)`;
     document.getElementById('obs-count').textContent = `(${obsRows.length} gesamt, letzte ${Math.min(obsRows.length,RECENT_OBS)} gezeigt)`;
   }catch(e){
     document.getElementById('compare-table').innerHTML = `<div class="err">Fehler beim Laden: ${e.message}</div>`;
+    document.getElementById('accuracy-table').innerHTML = '';
     document.getElementById('pred-table').innerHTML = '';
     document.getElementById('obs-table').innerHTML = '';
     document.getElementById('stats').innerHTML = '';
