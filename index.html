@@ -2455,14 +2455,17 @@ function prefetchSatNow(){
 // also nicht als "klar"-Indikator. Schwelle konservativ auf 35 gesenkt (unterhalb aller bisherigen
 // "nicht klar"-Messwerte), auf Kosten dafür, dass echtes Klarwetter in der Grauzone seltener per
 // Override erkannt wird.
-const SAT_CLEAR_LUM_MAX=35;
-// Zweiter, deutlich höherer Schwellwert für die Gegenrichtung (Station meldet klar, Satellit
-// zeigt aber Wolken): nur ein eindeutig erkennbarer kalter/hoher Wolkenschirm soll die Station
-// überstimmen. Dazwischen (45-55) bleibt bewusst unentschieden — weder clear noch cloudy greift,
-// um nicht bei jeder Grauzonen-Messung hin- und herzuspringen.
-const SAT_CLOUDY_LUM_MIN=55;
-// Liefert {clear, cloudy}: clear=true nur unter SAT_CLEAR_LUM_MAX, cloudy=true nur ab
-// SAT_CLOUDY_LUM_MIN, sonst jeweils false; bei Sample-Fehler beide null (unbekannt).
+// 26.09.2026: Auf Wunsch enger gefasst — der Satellit greift nur ein, wenn er dem Modell/
+// Stations-Code widerspricht (siehe buildWeatherData: die beiden Zeilen unten wirken ohnehin nur
+// in genau diesem Fall), entscheidet dann aber über einen einzigen Mittelwert statt der bisherigen
+// unentschiedenen Grauzone 35-55. Bewusster Kompromiss: laut den Füssen-Referenzmessungen liegen
+// "klar" (~37-41) und "dünne/teilweise Bewölkung" (~38-40) in genau dieser Zone so dicht
+// beieinander, dass der Grauwert sie nicht zuverlässig trennt — der Satellit korrigiert jetzt
+// öfter, kann dabei aber öfter falsch liegen als mit der vorsichtigeren Grauzone davor.
+const SAT_CLEAR_LUM_MAX=45;
+const SAT_CLOUDY_LUM_MIN=45;
+// Liefert {clear, cloudy}: exakt eines von beiden ist true (Kippschalter am Mittelwert), da
+// SAT_CLEAR_LUM_MAX===SAT_CLOUDY_LUM_MIN; bei Sample-Fehler beide null (unbekannt).
 // Gemittelt über einen 3x3-Block statt Einzelpixel, um Rauschen/Wolkenkanten-Artefakte und
 // Georegistrierungs-Versatz (Kachel vs. exakter Standort) zu glätten.
 function sampleSatelliteSky(lat,lon){
