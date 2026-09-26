@@ -1076,8 +1076,15 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
     // Beobachtung zu vertrauen, die nicht vom Standort stammt.
     const condIsFallback = !!(bs.weather.fallback_source_ids && bs.weather.fallback_source_ids.condition);
     if (!condIsFallback) nowCode = brightSkyToWmoCode(bs.weather);
+    // Dieselbe Fallback-Gefahr gilt für die Temperatur: fällt sie auf eine andere Station zurück,
+    // kann das z.B. eine nahe Bergstation sein (Oberursel → Kleiner Feldberg, 822m/9km entfernt,
+    // live beobachtet: 15°C real im Tal vs. ~9°C Bergstation bei Inversionswetterlage) — dann lieber
+    // die Modell-Temperatur zeigen statt einer nicht-repräsentativen Beobachtung. bsUsed unten hängt
+    // an derselben station-Zuweisung, damit auch die Anzeige ("📡 Station" vs. "🛰️ Modellschätzung")
+    // zum tatsächlich genutzten Wert passt.
+    const tempIsFallback = !!(bs.weather.fallback_source_ids && bs.weather.fallback_source_ids.temperature);
     const src = (bs.sources||[]).find(s=>s.id===bs.weather.source_id);
-    if (src) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
+    if (src && !tempIsFallback) station = {source:'brightsky', name:src.station_name, distanceKm: Math.round(src.distance/100)/10};
   }
   // Satelliten-Override, beide Richtungen — bewusst NACH der Stations-Zuweisung oben: die
   // Station kann mehrere km entfernt liegen (siehe station.distanceKm) und dort lokal anders
