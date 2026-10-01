@@ -168,6 +168,7 @@
     .fc-min{font-size:13px;color:var(--text-dim);margin-top:1px;}
     .fc-spread{font-size:10px;color:var(--text-dim);margin-top:3px;}
     .fc-rain{font-size:11px;color:var(--blue);margin-top:6px;}
+    .fc-rain-note{font-size:10px;color:var(--text-dim);margin-top:2px;}
     .fc-thunder{font-size:11px;color:var(--accent);font-weight:700;margin-top:2px;}
     .fc-sun{font-size:11px;color:var(--accent);margin-top:4px;}
     .fc-wind{font-size:11px;color:var(--text-dim);margin-top:2px;}
@@ -307,6 +308,16 @@ function hexToRgba(hex,a){
 // dieselbe Farbfamilie wie die Regen-Zellen im Modellvergleich (renderModelMatrix, mm-cell),
 // damit "wie viel Regen" app-weit immer denselben Farbverlauf nutzt. Das Modell selbst wird
 // separat kodiert (Label- bzw. Legendenfarbe), nicht mehr über die Punktfarbe.
+// Zusatzzeile der Tageskarte: die Hauptzahl (💧) gilt für 6–23 Uhr. Hier steht, WANN der Regen
+// fällt, wenn nicht der ganze Tag nass ist ("nur morgens"), und ein Nacht-Hinweis (0–5 Uhr),
+// damit Nachtregen den Tag nicht einfärbt, aber trotzdem sichtbar bleibt.
+function rainNote(d){
+  const wet=(d.parts||[]).filter(p=>p.rain>=30);
+  const bits=[];
+  if(wet.length&&wet.length<d.parts.length) bits.push('nur '+wet.map(p=>p.lbl.toLowerCase()).join(' + '));
+  if((d.nightRain||0)>=30) bits.push(`🌙 ${d.nightRain}%`);
+  return bits.length?`<div class="fc-rain-note">${bits.join(' · ')}</div>`:'';
+}
 function rainScaleColor(pct){
   const v=pct==null?0:Math.max(0,Math.min(100,pct));
   return hexToRgba('#6ba3d6',0.18+(v/100)*0.82);
@@ -573,7 +584,7 @@ function render(data){
           <div class="fc-max" style="color:${tempCol(r.max)}">${r.max}°</div>
           <div class="fc-min">${r.min}°</div>
           ${(r.spread||0)>=3?`<div class="fc-spread" title="${r.mdetail||''}">⇅ ±${Math.round(r.spread/2)}°</div>`:''}
-          <div class="fc-rain">💧 ${r.rain}%${r.rainMm>=0.1?` · ${r.rainMm}mm`:''}</div>
+          <div class="fc-rain">💧 ${r.rain}%${r.rainMm>=0.1?` · ${r.rainMm}mm`:''}</div>${rainNote(r)}
           ${th>25?`<div class="fc-thunder">⚡ ${th}%</div>`:''}
           <div class="fc-sun">☀ ${r.sun}h</div>
           <div class="fc-wind">🌬 ${r.wind}</div>
@@ -1236,6 +1247,9 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
     // Tages-Regenrisiko/-menge aus denselben Abschnitten (6–23 Uhr) wie Morgens/Mittags/Abends,
     // damit Tageskarte und Detailansicht nie auseinanderlaufen. Die 24h-Werte (daily.*) zählten
     // Nachtregen um 0–2 Uhr mit, der in keinem Abschnitt und keiner Tagesstunde sichtbar war.
+    const nightIxs=hIdxs.filter(ix=>hourAt(ix)<6);
+    const nightRain=nightIxs.length?Math.round(Math.max(...nightIxs.map(ix=>
+      ensRain&&ensRain[htimes[ix]]!=null?ensRain[htimes[ix]]:hConsensus(ix,'precipitation_probability',raw.hourly.precipitation_probability[ix]||0)))):0;
     let rainMm = Math.round((raw.daily.precipitation_sum[i]||0)*10)/10;
     if (parts.length) {
       rain = Math.max(...parts.map(p=>p.rain));
@@ -1247,7 +1261,7 @@ function buildWeatherData(raw, rawM, ensRain, satSky, bs){
       icon:ic, max:Math.round(tmax),
       min:Math.round(tmin), cond:co,
       rain:Math.round(rain),
-      rainMm,
+      rainMm, nightRain,
       thunder: thunderDay,
       snow:0, sun:sunH,
       wind: Math.round(raw.daily.wind_speed_10m_max[i] || 0),
@@ -2853,6 +2867,8 @@ function computeAltDays(h,elevation){
     const dayCodes=windowCodes.length?windowCodes:hIdxs.map(ix=>h.weather_code[ix]);
     // Wie in buildWeatherData: Tageswerte aus den Abschnitten (6–23 Uhr), nicht aus dem 24h-Maximum.
     const dayRain=Math.max(...parts.map(p=>p.rain));
+    const nightIxs=hIdxs.filter(ix=>hourAt(ix)<6);
+    const nightRain=nightIxs.length?Math.round(Math.max(...nightIxs.map(ix=>h.precipitation_probability[ix]||0))):0;
     const [dIcon,dCond]=wmoIcon(reconcileCode(pickDayCode(dayCodes),dayRain));
     const dt=new Date(ds+'T00:00:00');
     return {
@@ -2860,7 +2876,7 @@ function computeAltDays(h,elevation){
       icon:dIcon,cond:dCond,
       max:dayTemps.length?Math.round(Math.max(...dayTemps)):null,
       min:dayTemps.length?Math.round(Math.min(...dayTemps)):null,
-      rain:dayRain,
+      rain:dayRain,nightRain,
       rainMm:Math.round(parts.reduce((s,p)=>s+p.rainMm,0)*10)/10,
       wind:Math.round(Math.max(...hIdxs.map(ix=>h.wind_speed_10m[ix]||0))),
       thunder:Math.max(...dayCodes.map(thunderPct)),
@@ -2885,7 +2901,7 @@ function renderAltDays(days){
           <span class="fc-icon">${d.icon}</span>
           <div class="fc-max" style="color:${tempCol(d.max)}">${d.max}°</div>
           <div class="fc-min">${d.min}°</div>
-          <div class="fc-rain">💧 ${d.rain}%${d.rainMm>=0.1?` · ${d.rainMm}mm`:''}</div>
+          <div class="fc-rain">💧 ${d.rain}%${d.rainMm>=0.1?` · ${d.rainMm}mm`:''}</div>${rainNote(d)}
           ${th>25?`<div class="fc-thunder">⚡ ${th}%</div>`:''}
           <div class="fc-wind">🌬 ${d.wind}</div>
         </div>`;
