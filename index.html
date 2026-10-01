@@ -2851,7 +2851,8 @@ function computeAltDays(h,elevation){
     const dayTemps=hIdxs.map(tempAt).filter(v=>v!=null);
     const windowCodes=hIdxs.filter(ix=>hourAt(ix)>=9&&hourAt(ix)<=18).map(ix=>h.weather_code[ix]);
     const dayCodes=windowCodes.length?windowCodes:hIdxs.map(ix=>h.weather_code[ix]);
-    const dayRain=Math.round(Math.max(...hIdxs.map(ix=>h.precipitation_probability[ix]||0)));
+    // Wie in buildWeatherData: Tageswerte aus den Abschnitten (6–23 Uhr), nicht aus dem 24h-Maximum.
+    const dayRain=Math.max(...parts.map(p=>p.rain));
     const [dIcon,dCond]=wmoIcon(reconcileCode(pickDayCode(dayCodes),dayRain));
     const dt=new Date(ds+'T00:00:00');
     return {
@@ -2860,7 +2861,7 @@ function computeAltDays(h,elevation){
       max:dayTemps.length?Math.round(Math.max(...dayTemps)):null,
       min:dayTemps.length?Math.round(Math.min(...dayTemps)):null,
       rain:dayRain,
-      rainMm:Math.round(hIdxs.reduce((s,ix)=>s+(h.precipitation[ix]||0),0)*10)/10,
+      rainMm:Math.round(parts.reduce((s,p)=>s+p.rainMm,0)*10)/10,
       wind:Math.round(Math.max(...hIdxs.map(ix=>h.wind_speed_10m[ix]||0))),
       thunder:Math.max(...dayCodes.map(thunderPct)),
       parts
