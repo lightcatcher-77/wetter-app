@@ -732,3 +732,4 @@
 {"time":"2026-10-25T00:30:00+00:00","temp":1.5,"precip_mm":0,"station":"Halblech-Bayernieder","dist_m":0,"source":"brightsky"}
 {"time":"2026-10-25T05:30:00+00:00","temp":4.6,"precip_mm":1.2,"station":"Halblech-Bayernieder","dist_m":0,"source":"brightsky"}
 {"time":"2026-10-25T10:30:00+00:00","temp":10.7,"precip_mm":0.6,"station":"Halblech-Bayernieder","dist_m":0,"source":"brightsky"}
+{"time":"2026-10-25T14:30:00+00:00","temp":11.6,"precip_mm":0.12,"station":"Halblech-Bayernieder","dist_m":0,"source":"brightsky"}
