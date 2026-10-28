@@ -1934,7 +1934,10 @@ function dwdClassifyPointAtTime(loc,isoTime){
     .then(r=>r.ok?r.json():null)
     .then(j=>{
       const v=j&&j.features&&j.features[0]&&j.features[0].properties&&j.features[0].properties.RV_ANALYSIS;
-      if(v==null||v<=0)return null;
+      // Unter 0,1 mm/h als "kein Regen" werten: einzelne Pixel mit Nieselspuren/Radarrauschen
+      // (live beobachtet bei hoher Luftfeuchte) stellten sonst das Hero dauerhaft auf Regen,
+      // obwohl die Karte nichts zeigt und es real trocken war. Nodata-Wert des Layers ist -0,001.
+      if(v==null||v<0.1)return null;
       if(v>10)return{level:'stark',label:'kräftiger Regen'};
       if(v>=2.5)return{level:'mittel',label:'mäßiger Regen'};
       return{level:'leicht',label:'leichter Regen'};
