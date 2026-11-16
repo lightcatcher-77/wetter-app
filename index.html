@@ -2194,11 +2194,15 @@ async function radarCheckIncoming(){
     }
   }
   if(seq!==radarIncomingSeq)return;
-  if(firstIncomingMin!=null&&firstIncomingMin<=60&&lastHourlyNow.rain<30){
+  // Vorwarnung immer zeigen, sobald das Radar Regen ankündigt — früher nur bei Modell-Regen <30%,
+  // wodurch der Hero trocken aussah ("Wechselnd bewölkt"), obwohl Radar UND Modelle Regen sahen.
+  // Der Modell-Vergleich hängt nur noch als Zusatz dran, wenn die Modelle den Regen nicht zeigen.
+  if(firstIncomingMin!=null&&firstIncomingMin<=60){
+    const modelNote=lastHourlyNow.rain<30?` — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`:'.';
     el.style.display='block';
-    el.textContent=firstIncomingMin===0
-      ? `${RADAR_INFO_ICON} Laut Radar gerade Regen in der Nähe — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`
-      : `${RADAR_INFO_ICON} Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen — Modelle zeigen aktuell nur ${lastHourlyNow.rain}%.`;
+    el.textContent=(firstIncomingMin===0
+      ? `${RADAR_INFO_ICON} Laut Radar gerade Regen in der Nähe`
+      : `${RADAR_INFO_ICON} Radar-Prognose: in ca. ${firstIncomingMin} Min. könnte Regen eintreffen`)+modelNote;
   }else{
     el.style.display='none';
   }
