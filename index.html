@@ -1312,7 +1312,7 @@ async function fetchLocationName(lat,lon){
 async function fetchWarnings(lat,lon){
   const out=[];
   try{
-    const r=await fetch(`https://api.brightsky.dev/alerts?lat=${lat}&lon=${lon}`);
+    const r=await fetch(`https://api.brightsky.dev/alerts?lat=${lat}&lon=${lon}`,{signal:AbortSignal.timeout(SECONDARY_TIMEOUT_MS)});
     if(r.ok){
       const j=await r.json();
       (j.alerts||[]).forEach(a=>out.push({
@@ -1325,7 +1325,7 @@ async function fetchWarnings(lat,lon){
   // Österreich (grobe Bounding Box) zusätzlich über GeoSphere/ZAMG
   if(lat>=46.3&&lat<=49.1&&lon>=9.5&&lon<=17.2){
     try{
-      const r=await fetch(`https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lon=${lon}&lat=${lat}&lang=de`);
+      const r=await fetch(`https://warnungen.zamg.at/wsapp/api/getWarningsForCoords?lon=${lon}&lat=${lat}&lang=de`,{signal:AbortSignal.timeout(SECONDARY_TIMEOUT_MS)});
       if(r.ok){
         const j=await r.json();
         (j?.properties?.warnings||[]).forEach(w=>{
@@ -2501,6 +2501,7 @@ function sampleSatelliteSky(lat,lon){
     const url=`${EUMETSAT_WMS}?service=WMS&version=1.3.0&request=GetMap&layers=mtg_fd:ir105_hrfi&styles=&format=image/png&crs=CRS:84&bbox=${bbox}&width=16&height=16`;
     const img=new Image();
     img.crossOrigin='anonymous';
+    setTimeout(()=>resolve({clear:null,cloudy:null}),SECONDARY_TIMEOUT_MS);
     img.onload=()=>{
       try{
         const c=document.createElement('canvas');
@@ -3130,6 +3131,9 @@ function showError(msg){
   document.getElementById('content-bottom').innerHTML='';
 }
 
+// Neben-Requests (Modelle, Ensemble, Bright Sky, Warnungen, Satellit) dürfen die Anzeige nicht
+// länger als das aufhalten — fehlen sie, rendert die App ohne sie (alle haben schon Fallbacks).
+const SECONDARY_TIMEOUT_MS=6000;
 let isLoading=false, hasRendered=false, lastTs='';
 async function loadAll(){
   if(isLoading) return;
@@ -3148,13 +3152,13 @@ async function loadAll(){
     setBadge('Wetterdaten werden geladen…');
     const [main,models,ens,place,warns,satSky,dav,brightSky]=await Promise.all([
       fetch(mainUrl(lat,lon)).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
-      fetch(modelsUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(ensembleUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(modelsUrl(lat,lon),{signal:AbortSignal.timeout(SECONDARY_TIMEOUT_MS)}).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(ensembleUrl(lat,lon),{signal:AbortSignal.timeout(SECONDARY_TIMEOUT_MS)}).then(r=>r.ok?r.json():null).catch(()=>null),
       (activeLoc.mode==='geo'&&pos)?fetchLocationName(lat,lon):Promise.resolve(null),
       fetchWarnings(lat,lon),
       sampleSatelliteSky(lat,lon),
       inDavRegion(lat,lon)?fetchDAV():Promise.resolve(null),
-      isGermany(lat,lon)?fetch(brightSkyUrl(lat,lon)).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)
+      isGermany(lat,lon)?fetch(brightSkyUrl(lat,lon),{signal:AbortSignal.timeout(SECONDARY_TIMEOUT_MS)}).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)
     ]);
     if(!main.current||!main.hourly||!main.daily) throw new Error('Unerwartetes Antwortformat');
     const data=buildWeatherData(main,models,buildEnsRain(ens),satSky,brightSky);
